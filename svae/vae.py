@@ -5,7 +5,7 @@ import torch.nn.functional as F
 from torch.distributions.gamma import Gamma
 
 # Custome imports
-from.sampling import sample_vmf
+from.sampling import sample_vmf, sample_gaussian
 from.utils import Ive
 
 def torch_gamma_func(val):
@@ -127,8 +127,7 @@ class GaussianVAE(nn.Module):
     
     def reparameterize(self, mu, logvar):
         std = torch.exp(0.5 * logvar)
-        eps = torch.randn_like(std)
-        return mu + eps * std
+        return sample_gaussian(mu, std)
     
     def decode(self, z):
         h = F.relu(self.fc3(z))

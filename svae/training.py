@@ -50,7 +50,7 @@ def training_svae(dataloader: torch.utils.data.DataLoader,
                   model_svae: SVAE, 
                   optimizer: torch.optim.Optimizer, 
                   epochs: int = 50,
-                  beta_kl : float = 0.1,
+                  beta_kl : float = 1,
                   scheduler: torch.optim.lr_scheduler.LRScheduler = None,
                   patience: int | None = 5,
                   show_loss_every: int = 10):
@@ -90,6 +90,10 @@ def training_svae(dataloader: torch.utils.data.DataLoader,
             print(f"\nEarly stoppage after {epoch} epochs with patience of {patience}.")
             final_loss_idx = early_stopper.best_loss_idx
             print(f"Best epoch: {final_loss_idx}")
+            if final_loss_idx == 1:
+                # 2 losses if the best epoch was the first
+                # this avoids plotting a single point in other functions
+                final_loss_idx = 2
             return early_stopper.best_model, losses[:final_loss_idx]
         
         losses.append(epoch_loss)
@@ -102,7 +106,7 @@ def training_nvae(dataloader: torch.utils.data.DataLoader,
                   model_nvae: GaussianVAE, 
                   optimizer: torch.optim.Optimizer, 
                   epochs: int = 50,
-                  beta_kl : float = 0.001,
+                  beta_kl : float = 0.1,
                   scheduler: torch.optim.lr_scheduler.LRScheduler = None,
                   patience: int | None = 5,
                   show_loss_every: int = 10):
@@ -122,19 +126,26 @@ def training_nvae(dataloader: torch.utils.data.DataLoader,
             x_recon, mu, logvar = model_nvae(x)
             
             recon_loss = F.mse_loss(x_recon, x)
-            kl_loss = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp())
+            kl_loss = 0.5 * torch.mean(-1 - logvar + mu.pow(2) + logvar.exp())
+            # >> RAPH: Should be the mean across samples but was
+            # torch.sum previously I corrected it
             
             loss = recon_loss + beta_kl * kl_loss
             loss.backward()
             optimizer.step()
             if scheduler is not None:
                 scheduler.step()
+            epoch_loss += loss.item()
         epoch_loss = epoch_loss / len(dataloader)
         # check early stoppage
         if early_stopper.check_stop(model_nvae, epoch_loss):
             print(f"\nEarly stoppage after {epoch} epochs with patience of {patience}.")
             final_loss_idx = early_stopper.best_loss_idx
             print(f"Best epoch: {final_loss_idx}")
+            if final_loss_idx == 1:
+                # 2 losses if the best epoch was the first
+                # this avoids plotting a single point in other functions
+                final_loss_idx = 2
             return early_stopper.best_model, losses[:final_loss_idx]
         
         losses.append(epoch_loss)

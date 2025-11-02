@@ -58,3 +58,9 @@ def sample_vmf(mu, kappa, batch_size):
         samples.append(z)
     
     return torch.stack(samples)
+
+def sample_gaussian(mu, std):
+    """
+    Sampling from a gaussian
+    """
+    return mu + std * torch.randn_like(std)
