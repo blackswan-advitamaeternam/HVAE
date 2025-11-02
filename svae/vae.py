@@ -2,11 +2,11 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from scipy.special import ive
 from torch.distributions.gamma import Gamma
 
 # Custome imports
 from.sampling import sample_vmf
+from.utils import Ive
 
 def torch_gamma_func(val):
     """
@@ -14,7 +14,7 @@ def torch_gamma_func(val):
     To do so we need to use lgamma which computes ln(|gamma(val)|).
     Thus to access the gamma value we need to compose with the exponential.
     """
-    return torch.exp(torch.lgamma(val))
+    return torch.exp(torch.lgamma(torch.tensor(val)))
 
 class SVAE(nn.Module):
     """implémentation du s-vae avec distribution vmf"""
@@ -30,7 +30,8 @@ class SVAE(nn.Module):
         self.fc_kappa = nn.Linear(hidden_dim // 2, 1)
         # >> RAPH: I stand corrected, a Gaussian in Rd needs mu and sigma 
         # to be in Rd but that's not the case for the vMF: a vMF 
-        # on Sd-1 (Rd) require mu in Rd but kappa in R ! So you were right :D
+        # on Sd-1 (Rd) require mu in Rd but kappa in R ! 
+        # So you were right :D
         
         # décodeur
         self.fc3 = nn.Linear(latent_dim, hidden_dim // 2)
@@ -56,43 +57,34 @@ class SVAE(nn.Module):
         h = F.relu(self.fc4(h))
         return self.fc5(h)
     
-    def kl_vmf(self, mu, kappa):
+    def kl_vmf(self, kappa):
         # >> RAPH: One of the main remarks in the calculations 
-        # of the KL is that it does not depend on mu => remove unused mu
-        # >> RAPH: The other main remark is that we cannot autograd this term
-        # so we need to specify the gradient by hand for kappa see kl_grad
+        # of the KL is that it does not depend on mu => removed unused mu
         """calcul de la divergence kl"""
         m = self.latent_dim
         
         # utilisation de ive pour stabilité numérique
-        iv = ive(m/2, kappa) * torch.exp(torch.abs(kappa)) 
-        # >> RAPH: Why go back to the iv instead of directly using 
-        # iv(m/2, kappa) ?
-        iv_prev = ive(m/2 - 1, kappa) * torch.exp(torch.abs(kappa))
-        
+        iv = Ive.apply(m/2, kappa) #* torch.exp(torch.abs(kappa)) 
+        iv_prev = Ive.apply(m/2 - 1, kappa) #* torch.exp(torch.abs(kappa))
+        # >> RAPH: Why go back to the iv instead of directly using ive
+        # authors only use ive since exponentials will cancel out due to division
+        # I removed the exponentials
+
+        # >> RAPH: ive is not differentiable natively by PyTorch so it 
+        # means calling ive on a detached tensor (no grad history) so that does not work
+        # to do so we need to specify the backward ourselves (see p.14 equation 16)
+        # implemented as Ive in utils.py 
+
         kl = kappa * (iv / (iv_prev + 1e-8))
         
         # terme log c_m(kappa)
-        log_cm = (m/2 - 1) * torch.log(kappa + 1e-8) - (m/2) * torch.log(2 * torch.pi) - torch.log(iv_prev + 1e-8)
-        
+        log_cm = (m/2 - 1) * torch.log(kappa + 1e-8) - (m/2) * torch.log(2 * torch.tensor(torch.pi)) - (kappa + torch.log(iv_prev + 1e-8))
+        # >> RAPH: there was a kappa missing, I added it
+
         # terme constant
         const = -torch.log(torch_gamma_func(m/2) / (2 * torch.pi**(m/2)))
-
+        
         return (kl + log_cm + const).mean()
-    
-    def kl_grad(self, kappa):
-        """
-        Computes the average gradient wrt kappa over the batch
-        """
-        m = self.latent_dim
-        kappa = kappa.detach().numpy()
-
-        iv_1 = ive(m/2 + 1, kappa)
-        iv_2 = ive(m/2 - 1, kappa)
-        iv_3 = ive(m/2, kappa)
-        iv_4 = ive(m/2 - 2, kappa)
-        grad = 0.5 * kappa * (iv_1/iv_2 - (iv_3 * (iv_4 + iv_3))/iv_2**2 + 1)
-        return grad.mean()
     
     def forward(self, x):
         # B x input_dim
