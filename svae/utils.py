@@ -2,8 +2,32 @@
 import numpy as np
 import torch
 from torch.utils.data import TensorDataset, DataLoader
+from scipy.special import ive
 from typing import Tuple, List
 import sys
+
+# =========================
+# computation utils
+# =========================
+class Ive(torch.autograd.Function):
+    """
+    Computes a differentiable scaled bessel function.
+    """
+    @staticmethod
+    def forward(ctx, order, value):
+        ctx.save_for_backward(value)
+        ctx.order = order
+        ive_val = ive(order, value.detach().cpu().numpy())
+        return torch.from_numpy(ive_val).to(value)
+    
+    @staticmethod
+    def backward(ctx, grad_output):
+        value = ctx.saved_tensors[0]
+        order = ctx.order
+        # derivative from p.14, equation 16:
+        # d/dx ive(order, value) = 1/2 * (ive(order - 1, value) + ive(order + 1, value))
+        di_dval = 0.5 * (ive(order - 1, value) + ive(order + 1, value))
+        return None, grad_output * di_dval
 
 # =========================
 # Checking utils
@@ -13,14 +37,6 @@ def has_method(obj: object, method_name: str) -> bool:
     Checks if an object has the desired method
     """
     return callable(getattr(obj, method_name, None))
-
-# =========================
-# Training utils
-# =========================
-def manual_grad_update(model, grad, lr):
-    for parameters in model.parameters():
-        parameters.data -= lr * grad
-    
 
 # =========================
 # Synthetic data generation
