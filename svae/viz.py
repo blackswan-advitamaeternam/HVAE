@@ -32,10 +32,12 @@ def plot_latent_space(true_2d_latent: np.ndarray,
 
     plt.tight_layout()
     if save_path is not None:
-        os.makedirs(save_path, exist_ok=True)
+        if "/" in save_path:
+            os.makedirs(save_path, exist_ok=True)
+        plot_ext = os.path.splitext(save_path)[-1][1:]
         plt.savefig(save_path, 
                     bbox_inches='tight', 
-                    format=os.path.splitext(save_path)[-1])
+                    format=plot_ext)
         print(f"\nPlot saved at: {save_path}.")
     else:
         plt.show()
