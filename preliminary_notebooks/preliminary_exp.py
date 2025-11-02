@@ -56,4 +56,4 @@ if __name__ == "__main__":
                          labels, 
                          svae_losses,
                          nvae_losses, 
-                         save_path="Compare_circle_SVAE_NVAE.pdf")
+                         save_path="Plots/Compare_circle_SVAE_NVAE.pdf")
