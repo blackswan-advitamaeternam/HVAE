@@ -129,7 +129,7 @@ def reconstruction_metrics(model, save_path):
 if __name__ == "__main__":
     file_parent = "/".join(os.path.abspath(__file__).split("/")[:-1])
     os.chdir(file_parent)
-    
+
     # load and prepare tahoe
     sample_data, sample_labels = prepare_tahoe_dataset(1000)
     sample_data_pca, pca = preprocess(sample_data)
@@ -141,17 +141,24 @@ if __name__ == "__main__":
 
     # ===============SVAE pour Tahoe=============
     print("[SVAE] Instantiating SVAE and optimizer..")
-    model_svae = SVAE(50, 256, 10)  # dimension latente 10 pour capturer complexité
-    optimizer = torch.optim.Adam(model_svae.parameters(), lr=0.0001)
+    
+    # >> RAPH: From what I've seen, SVAE is much more sensitive to hyperparameters
+    # on this dataset, especially, the beta_kl needs to be low
+    # It can freeze during training => investigate why 
+    # also look at the warming up of beta kl (start with very small and 
+    # gradually increase, I saw that in another paper)
+    # 8 = multiplier of 2 + close to the maximum surface area of the sphere (d=7)
+    model_svae = SVAE(50, 256, 8)  # dimension latente 10 pour capturer complexité
+    optimizer = torch.optim.Adam(model_svae.parameters(), lr=5e-4)
 
     # training
     print("[SVAE] Started training..")
     model_svae, svae_losses = training_loop(tahoe_loader, 
                                             model_svae,
                                             optimizer,
-                                            epochs=50,
-                                            beta_kl=0.1,
-                                            patience=5,
+                                            epochs=25,
+                                            beta_kl=1e-4,
+                                            patience=10,
                                             show_loss_every=1)
     # analyse espace latent tahoe
     svae_latent_samples, mu_svae, kappas = model_svae.get_latent_samples(tahoe_tensor)
