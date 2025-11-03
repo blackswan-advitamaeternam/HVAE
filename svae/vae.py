@@ -3,6 +3,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.distributions.gamma import Gamma
+import numpy as np
 
 # Custome imports
 from.sampling import sample_vmf, sample_gaussian
@@ -102,6 +103,20 @@ class SVAE(nn.Module):
         
         return x_recon, mu, kappa
     
+    def get_latent_samples(self, data_tensor):
+        with torch.no_grad():
+            print("[SVAE] Encoding dataset..")
+            mu_all, kappa_all = self.encode(data_tensor)
+
+            print("[SVAE] Sampling from latent space..")
+            # For each input's latent distribution, sample 1 element
+            svae_latent_samples = []
+            for i in range(data_tensor.size(0)):
+                z = sample_vmf(mu_all[i:i+1,:], kappa_all[i:i+1,:], 1)
+                svae_latent_samples.append(z.cpu().numpy())
+            svae_latent_samples = np.concat(svae_latent_samples, axis=0)
+            return svae_latent_samples, mu_all, kappa_all
+    
 
 class GaussianVAE(nn.Module):
     """vae standard avec prior gaussien"""
@@ -137,4 +152,16 @@ class GaussianVAE(nn.Module):
     def forward(self, x):
         mu, logvar = self.encode(x)
         z = self.reparameterize(mu, logvar)
-        return self.decode(z), mu, logvar
+        x_recon = self.decode(z)
+        return x_recon, mu, logvar
+    
+    def get_latent_samples(self, data_tensor):
+        with torch.no_grad():
+            print("[NVAE] Encoding dataset..")
+            mu_all, std_all = self.encode(data_tensor)
+
+            print("[NVAE] Sampling from latent space..")
+            # For each input's latent distribution, sample 1 element
+            nvae_latent_samples = sample_gaussian(mu_all, std_all)
+            nvae_latent_samples = nvae_latent_samples.cpu().numpy()
+            return nvae_latent_samples, mu_all, std_all

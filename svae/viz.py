@@ -4,6 +4,16 @@ from typing import NoReturn
 import numpy as np
 import os
 
+def save_plot(save_path):
+    if "/" in save_path:
+        parent_path = "/".join(save_path.split("/")[:-1])
+        os.makedirs(parent_path, exist_ok=True)
+    plot_ext = os.path.splitext(save_path)[-1][1:]
+    plt.savefig(save_path, 
+                bbox_inches='tight', 
+                format=plot_ext)
+    print(f"\nPlot saved at: {save_path}.")
+
 def plot_latent_space(true_2d_latent: np.ndarray, 
                       learned_2d_latent: np.ndarray, 
                       labels: np.ndarray, 
@@ -32,13 +42,7 @@ def plot_latent_space(true_2d_latent: np.ndarray,
 
     plt.tight_layout()
     if save_path is not None:
-        if "/" in save_path:
-            os.makedirs(save_path, exist_ok=True)
-        plot_ext = os.path.splitext(save_path)[-1][1:]
-        plt.savefig(save_path, 
-                    bbox_inches='tight', 
-                    format=plot_ext)
-        print(f"\nPlot saved at: {save_path}.")
+        save_plot(save_path)
     else:
         plt.show()
 
@@ -95,12 +99,6 @@ def compare_latent_space(true_2d_latent: np.ndarray,
 
     plt.tight_layout()
     if save_path is not None:
-        if "/" in save_path:
-            os.makedirs(save_path, exist_ok=True)
-        plot_ext = os.path.splitext(save_path)[-1][1:]
-        plt.savefig(save_path, 
-                    bbox_inches='tight', 
-                    format=plot_ext)
-        print(f"\nPlot saved at: {save_path}.")
+        save_plot(save_path)
     else:
         plt.show()

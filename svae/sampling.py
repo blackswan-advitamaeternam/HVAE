@@ -34,18 +34,19 @@ def sample_vmf(mu, kappa, batch_size):
     for i in range(batch_size): # for each sample
         while True:
             epsilon = Beta_dist.sample()
-            omega = (1 - (1 + b) * epsilon) / (1 - (1 - b) * epsilon) # >> RAPH: Corrected parenthises of the numerator
-            t = 2 * a * b / (1 - (1 - b) * epsilon)
+            omega = (1 - (1 + b[i]) * epsilon) / (1 - (1 - b[i]) * epsilon) # >> RAPH: Corrected parenthises of the numerator
+            t = 2 * a[i] * b[i] / (1 - (1 - b[i]) * epsilon)
             u = torch.rand(1)
-            if (m - 1) * torch.log(t) - t + d >= torch.log(u):
+            if (m - 1) * torch.log(t) - t + d[i] >= torch.log(u):
                 break
              
         # échantillonnage sur s^{m-2}
         v = torch.randn(m - 1)
         v = v / torch.norm(v)
-        
+
         # construction du sample
-        z = torch.cat([omega.unsqueeze(0), torch.sqrt(1 - omega**2) * v])
+        z = torch.cat([omega, 
+                       torch.sqrt(1 - omega**2) * v])
         
         # transformation householder pour aligner avec mu
         e1 = torch.zeros(m)
