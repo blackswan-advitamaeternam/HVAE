@@ -1,6 +1,7 @@
 """Sub-module to define training protocols"""
 import torch.nn.functional as F
 import torch
+import numpy as np
 
 # Custom imports
 from svae.vae import SVAE, GaussianVAE
@@ -45,48 +46,90 @@ class EarlyStopping(object):
         if self.patience_count >= self.patience:
             return True
         return False
-    
-def training_svae(dataloader: torch.utils.data.DataLoader,
-                  model_svae: SVAE, 
+
+def format_loss(val_epoch_parts, beta_kl):
+    """
+    print the loss components in the form:
+    -recon - beta_kl * kl
+    while handling signs cleanly (no '--' or '+ -').
+    """
+    recon = val_epoch_parts["recon"][-1]
+    kl_latent = val_epoch_parts["kl"][-1]
+    return f"- {recon:.4f} - {beta_kl} * {kl_latent:.4f}"
+
+def training(dataloader: torch.utils.data.DataLoader,
+                  val_dataloader:torch.utils.data.DataLoader,
+                  model: torch.nn.Module, 
                   optimizer: torch.optim.Optimizer, 
                   epochs: int = 50,
                   beta_kl : float = 1,
                   scheduler: torch.optim.lr_scheduler.LRScheduler = None,
-                  patience: int | None = 5,
+                  patience: int | None = 10,
                   show_loss_every: int = 10):
     """
-    Training protocol for SVAE models.
+    Training protocol for our VAE models.
     """
-    assert isinstance(model_svae, SVAE), f"This training loop is tailored for SVAE modules"
+    assert np.sum([isinstance(model, CLS) for CLS in SUPPORTED_CLASSES]) != 0, f"Unsupported model class: Only supports {SUPPORTED_CLASSES} but got {model.__class__}"
     # instantiate early stopper
     early_stopper = EarlyStopping(patience) if patience is not None else None
 
-    losses = []
-    for epoch in range(epochs):
+    losses = {"train":[], "val":[]}
+    all_parts = {"train":{"recon":[],
+                        "kl":[]},
+                "val":{"recon":[],
+                        "kl":[]}}
+    for epoch in range(1,epochs+1):
+        # TRAINING
+        model.train()
         epoch_loss = 0
+        epoch_parts = {"recon":[],
+                       "kl":[]}
         for batch in dataloader:
             x = batch[0]
             optimizer.zero_grad()
-            
-            x_recon, mu, kappa = model_svae(x)
-            
-            # reconstruction loss
-            recon_loss = F.mse_loss(x_recon, x)
-            
-            # kl divergence
-            kl_loss = model_svae.kl_vmf(kappa)
 
-            loss = recon_loss + beta_kl * kl_loss
-            loss.backward()
+            loss, parts = model.full_step(x, 
+                                        beta_kl=beta_kl)
             
+            loss.backward()
+
             optimizer.step()
+
             if scheduler is not None:
                 scheduler.step()
             epoch_loss += loss.item()
+            for key in epoch_parts.keys():
+                epoch_parts[key].append(parts[key])
+            
+        # register average epoch loss
         epoch_loss = epoch_loss / len(dataloader)
+        # register average of epoch parts
+        for key in epoch_parts.keys():
+            epoch_parts[key].append(np.mean(epoch_parts[key]))
 
+        # VALIDATION
+        model.eval()
+        val_epoch_loss = 0
+        val_epoch_parts = {"recon":[],
+                            "kl":[]}
+        
+        with torch.no_grad():
+            for batch in val_dataloader:
+                x = batch[0]
+                loss, parts = model.full_step(x, 
+                                            beta_kl=beta_kl)
+                val_epoch_loss += loss.item()
+                for key in val_epoch_parts.keys():
+                    val_epoch_parts[key].append(parts[key])
+                
+            # register average epoch loss
+            val_epoch_loss = val_epoch_loss / len(val_dataloader)
+            # register average of epoch parts
+            for key in val_epoch_parts.keys():
+                val_epoch_parts[key].append(np.mean(val_epoch_parts[key]))
+        
         # check early stoppage
-        if early_stopper.check_stop(model_svae, epoch_loss):
+        if early_stopper.check_stop(model, val_epoch_loss):
             print(f"\nEarly stoppage after {epoch} epochs with patience of {patience}.")
             final_loss_idx = early_stopper.best_loss_idx
             print(f"Best epoch: {final_loss_idx}")
@@ -94,87 +137,20 @@ def training_svae(dataloader: torch.utils.data.DataLoader,
                 # 2 losses if the best epoch was the first
                 # this avoids plotting a single point in other functions
                 final_loss_idx = 2
-            return early_stopper.best_model, losses[:final_loss_idx]
+            losses["train"] = losses["train"][:final_loss_idx]
+            losses["val"] = losses["val"][:final_loss_idx]
+            all_parts["train"] = {key:val[:final_loss_idx] for key, val in all_parts["train"].items()}
+            all_parts["val"] = {key:val[:final_loss_idx] for key, val in all_parts["val"].items()}
+            return early_stopper.best_model, losses, all_parts
         
-        losses.append(epoch_loss)
+        losses["train"].append(epoch_loss)
+        losses["val"].append(val_epoch_loss)
+        for key in all_parts["train"].keys():
+            all_parts["train"][key].append(np.mean(epoch_parts[key]))
+        for key in all_parts["val"].keys():
+            all_parts["val"][key].append(np.mean(val_epoch_parts[key]))
+        if epoch == 1:
+            print("Loss printing format:\nepoch x: val = loss (-recon - beta_kl * kl) | train = loss (-recon - beta_kl * kl)\n")
         if epoch % show_loss_every == 0:
-            print(f"epoch {epoch}: {losses[-1]:.4f}")
-    return model_svae, losses
-
-
-def training_nvae(dataloader: torch.utils.data.DataLoader,
-                  model_nvae: GaussianVAE, 
-                  optimizer: torch.optim.Optimizer, 
-                  epochs: int = 50,
-                  beta_kl : float = 0.1,
-                  scheduler: torch.optim.lr_scheduler.LRScheduler = None,
-                  patience: int | None = 5,
-                  show_loss_every: int = 10):
-    """
-    Training protocol for NVAE models.
-    """
-    assert isinstance(model_nvae, GaussianVAE), f"This training loop is tailored for SVAE modules"
-    early_stopper = EarlyStopping(patience) if patience is not None else None
-
-    losses = []
-    for epoch in range(epochs):
-        epoch_loss = 0
-        for batch in dataloader:
-            x = batch[0]
-            optimizer.zero_grad()
-            
-            x_recon, mu, logvar = model_nvae(x)
-            
-            recon_loss = F.mse_loss(x_recon, x)
-            kl_loss = 0.5 * torch.mean(-1 - logvar + mu.pow(2) + logvar.exp())
-            # >> RAPH: Should be the mean across samples but was
-            # torch.sum previously I corrected it
-            
-            loss = recon_loss + beta_kl * kl_loss
-            loss.backward()
-            optimizer.step()
-            if scheduler is not None:
-                scheduler.step()
-            epoch_loss += loss.item()
-        epoch_loss = epoch_loss / len(dataloader)
-        # check early stoppage
-        if early_stopper.check_stop(model_nvae, epoch_loss):
-            print(f"\nEarly stoppage after {epoch} epochs with patience of {patience}.")
-            final_loss_idx = early_stopper.best_loss_idx
-            print(f"Best epoch: {final_loss_idx}")
-            if final_loss_idx == 1:
-                # 2 losses if the best epoch was the first
-                # this avoids plotting a single point in other functions
-                final_loss_idx = 2
-            return early_stopper.best_model, losses[:final_loss_idx]
-        
-        losses.append(epoch_loss)
-        if epoch % show_loss_every == 0:
-            print(f"epoch {epoch}: {losses[-1]:.4f}")
-    return model_nvae, losses
-
-def training_loop(dataloader: torch.utils.data.DataLoader,
-                  model: SVAE | GaussianVAE, 
-                  optimizer: torch.optim.Optimizer, 
-                  epochs: int = 50,
-                  beta_kl : float = 0.001,
-                  scheduler: torch.optim.lr_scheduler.LRScheduler = None,
-                  **kwargs):
-    if isinstance(model, SVAE):
-        return training_svae(dataloader,
-                            model, 
-                            optimizer, 
-                            epochs,
-                            beta_kl,
-                            scheduler,
-                            **kwargs)
-    elif isinstance(model, GaussianVAE):
-        return training_nvae(dataloader,
-                            model, 
-                            optimizer, 
-                            epochs,
-                            beta_kl,
-                            scheduler,
-                            **kwargs)
-    else:
-        raise ValueError(f"Unsupported model class: Only supports {SUPPORTED_CLASSES} but got {model.__class__}")
+            print(f"epoch {epoch}: val = {losses["val"][-1]:.4f} ({format_loss(val_epoch_parts, beta_kl)}) | train = {losses["train"][-1]:.4f} ({format_loss(epoch_parts, beta_kl)})")
+    return model, losses, all_parts

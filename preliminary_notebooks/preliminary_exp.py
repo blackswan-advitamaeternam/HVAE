@@ -12,7 +12,7 @@ from svae.vae import SVAE, GaussianVAE
 from svae.sampling import sample_vmf, sample_gaussian
 from svae.utils import create_circle_training_data
 from svae.viz import compare_latent_space
-from svae.training import training_loop
+from svae.training import training
 
 if __name__ == "__main__":
     # ensures the working dir is that of the file
@@ -21,17 +21,24 @@ if __name__ == "__main__":
 
     # entrainement sur données circulaires
     print("Creating synthetic dataset..")
-    dataset = create_circle_training_data(1000, batch_size=32)
+    SIZE = 1000
+    TRAIN_SIZE = int(0.8 * SIZE)
+    dataset, val_dataset = create_circle_training_data(SIZE, batch_size=32, train_size=TRAIN_SIZE)
     dataloader, data_tensor, data_2d, labels = dataset
+    val_dataloader, val_data_tensor, val_data_2d, val_labels = val_dataset
 
     print("[SVAE] Instantiating SVAE and optimizer..")
     model_svae = SVAE(input_dim=100, hidden_dim=128, latent_dim=2)
     optimizer = torch.optim.Adam(model_svae.parameters(), lr=0.001)
 
     print("[SVAE] Started training..")
-    model_svae, svae_losses = training_loop(dataloader, model_svae, optimizer, 
-                                  epochs=50, beta_kl=0.1,
-                                  show_loss_every=1)
+    model_svae, svae_losses, all_svae_parts = training(dataloader, 
+                                    val_dataloader,
+                                    model_svae,
+                                    optimizer,
+                                    epochs=50,
+                                    beta_kl=0.1,
+                                    show_loss_every=1)
     
     # visualisation espace latent SVAE
     svae_latent_samples, _, _ = model_svae.get_latent_samples(data_tensor)
@@ -41,10 +48,13 @@ if __name__ == "__main__":
     optimizer = torch.optim.Adam(model_nvae.parameters(), lr=0.001)
 
     print("[NVAE] Started training..")
-    model_nvae, nvae_losses = training_loop(dataloader, model_nvae, optimizer, 
-                                  epochs=50, beta_kl=0.1,
-                                  patience=10,
-                                  show_loss_every=1)
+    model_nvae, nvae_losses, all_nvae_parts = training(dataloader, 
+                                    val_dataloader,
+                                    model_nvae,
+                                    optimizer,
+                                    epochs=50,
+                                    beta_kl=0.1,
+                                    show_loss_every=1)
     
     # visualisation espace latent NVAE
     nvae_latent_samples, _, _ = model_nvae.get_latent_samples(data_tensor)
