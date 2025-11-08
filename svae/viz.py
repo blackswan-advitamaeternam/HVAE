@@ -50,8 +50,8 @@ def compare_latent_space(true_2d_latent: np.ndarray,
                       svae_learned_2d_latent: np.ndarray, 
                       nvae_learned_2d_latent: np.ndarray,
                       labels: np.ndarray, 
-                      svae_losses: list,
-                      nvae_losses: list,
+                      svae_losses: dict,
+                      nvae_losses: dict,
                       save_path: str = None,
                       ) -> NoReturn:
     """
@@ -74,8 +74,10 @@ def compare_latent_space(true_2d_latent: np.ndarray,
     plt.axis('equal')
 
     plt.subplot(2, 3, 3)
-    plt.plot(svae_losses)
-    plt.title('S-VAE training loss')
+    plt.plot(svae_losses['train'], label='train')
+    plt.plot(svae_losses['val'], label='val')
+    plt.legend()
+    plt.title('S-VAE training & validation loss')
     plt.xlabel('epoch')
 
     plt.subplot(2, 3, 4)
@@ -93,8 +95,10 @@ def compare_latent_space(true_2d_latent: np.ndarray,
     plt.axis('equal')
 
     plt.subplot(2, 3, 6)
-    plt.plot(nvae_losses)
-    plt.title('N-VAE training loss')
+    plt.plot(nvae_losses['train'], label='train')
+    plt.plot(nvae_losses['val'], label='val')
+    plt.legend()
+    plt.title('N-VAE training & validation loss')
     plt.xlabel('epoch')
 
     plt.tight_layout()
