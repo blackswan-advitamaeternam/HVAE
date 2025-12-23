@@ -5,6 +5,14 @@ from torch.utils.data import TensorDataset, DataLoader
 import numpy as np
 from sklearn.model_selection import StratifiedKFold
 
+import os
+import pickle as pkl
+from pathlib import Path
+FILEPATH = Path(os.path.abspath(__file__))
+print(FILEPATH)
+PARENTFOLDER = FILEPATH.parent
+print(PARENTFOLDER)
+
 # Dynamically binarize the images
 def binarize(image, label):
     image = tf.cast(image, tf.float32) / 255.0
@@ -47,28 +55,43 @@ def make_cv_loaders_MNIST(cv=5, batch_size=128, **kwargs):
     pairs. Then loads the testset.
     Returns a list of (train_loader, val_loader) pairs for CV and the test loader
     """
-    X, Y = load_binarized_mnist_tensor("train", batch_size=batch_size)
+    if "splitted_MNIST.pkl" not in os.listdir(str(PARENTFOLDER)):
+        print("\nMaking splits..")
+        X, Y = load_binarized_mnist_tensor("train", batch_size=batch_size)
+        skf = StratifiedKFold(n_splits=cv)
+        split_indices = skf.split(X, Y)
 
-    skf = StratifiedKFold(n_splits=cv)
-    cv_list = []
-    for i, (train_index, val_index) in enumerate(skf.split(X, Y)):
-        train_X, train_Y = X[train_index,:], Y[train_index]
-        val_X, val_Y = X[val_index,:], Y[val_index]
+        cv_list = []
+        for i, (train_index, val_index) in enumerate(split_indices):
+            train_X, train_Y = X[train_index,:], Y[train_index]
+            val_X, val_Y = X[val_index,:], Y[val_index]
 
-        train_dataset = TensorDataset(train_X, train_Y) 
-        train_loader = DataLoader(train_dataset,
-                            batch_size=batch_size,
-                            shuffle=True,
-                            **kwargs)
-        
-        val_dataset = TensorDataset(val_X, val_Y) 
-        val_loader = DataLoader(val_dataset,
-                            batch_size=batch_size,
-                            shuffle=True,
-                            **kwargs)
-        cv_list.append((train_loader, val_loader))
+            train_dataset = TensorDataset(train_X, train_Y) 
+            train_loader = DataLoader(train_dataset,
+                                batch_size=batch_size,
+                                shuffle=True,
+                                **kwargs)
+            
+            val_dataset = TensorDataset(val_X, val_Y) 
+            val_loader = DataLoader(val_dataset,
+                                batch_size=batch_size,
+                                shuffle=True,
+                                **kwargs)
+            cv_list.append((train_loader, val_loader))
 
-    test_loader  = load_binarized_mnist_torch("test", batch_size=batch_size, shuffle=False)
+        test_loader  = load_binarized_mnist_torch("test", batch_size=batch_size, shuffle=False)
+
+        # save for future use
+        path = PARENTFOLDER / "splitted_MNIST.pkl"
+        with open(str(path), "wb") as f:
+            pkl.dump({"cv": cv_list, "test": test_loader}, f)
+    else:
+        print("\nLoading pre-computed splits..")
+        path = PARENTFOLDER / "splitted_MNIST.pkl"
+        # load splits
+        with open(str(path), "rb") as f:
+            dico = pkl.load(f)
+            cv_list, test_loader = dico["cv"], dico["test"]
     return cv_list, test_loader
 
 if __name__ == "__main__":
