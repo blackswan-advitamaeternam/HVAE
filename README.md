@@ -45,5 +45,11 @@ python preliminary_notebooks/preliminary_exp.py
 Corresponds to Table 2 of the paper.  
 See the Table 2 notebook:  
 <a target="_blank" href="https://colab.research.google.com/github/blackswan-advitamaeternam/HVAE/blob/raph/Table2_exp.ipynb"> <img src="https://colab.research.google.com/assets/colab-badge.svg" alt="Open In Colab"/> </a>
+
+#### **Semi-Suervised experiments (M1+M2)**
+Corresponds to Table 3 of the paper.  
+See the Table 3 notebook:  
+<a target="_blank" href="https://colab.research.google.com/github/blackswan-advitamaeternam/HVAE/blob/raph/Table3_exp.ipynb"> <img src="https://colab.research.google.com/assets/colab-badge.svg" alt="Open In Colab"/> </a>
+
 ## **Extension on single-cell data**
 
