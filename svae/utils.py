@@ -18,7 +18,7 @@ class Iv(torch.autograd.Function):
         ctx.save_for_backward(value)
         ctx.order = order
         iv_val = iv(order, value.detach().cpu().numpy())
-        return torch.from_numpy(iv_val).to(value)
+        return torch.from_numpy(iv_val).to(device=value.device, dtype=value.dtype)
     
     @staticmethod
     def backward(ctx, grad_output):
@@ -27,6 +27,7 @@ class Iv(torch.autograd.Function):
         # derivative from p.14, equation 16:
         # d/dx iv(order, value) = 1/2 * (iv(order - 1, value) + ive(order + 1, value))
         di_dval = 0.5 * (iv(order - 1, value) + iv(order + 1, value))
+        di_dval = torch.from_numpy(di_dval).to(device=value.device, dtype=value.dtype)
         return None, grad_output * di_dval
 
 class Ive(torch.autograd.Function):
@@ -50,28 +51,30 @@ class Ive(torch.autograd.Function):
         d_iv = 0.5 * (Iv(order - 1, value) + Iv(order + 1, value))
         term2 = torch.exp(-value) * d_iv
         d_ive = term1 + term2
+        d_ive = torch.from_numpy(d_ive).to(device=value.device, dtype=value.dtype)
         return None, grad_output * d_ive
 
 
-class Ive(torch.autograd.Function):
-    """
-    Computes a differentiable scaled bessel function.
-    """
-    @staticmethod
-    def forward(ctx, order, value):
-        ctx.save_for_backward(value)
-        ctx.order = order
-        ive_val = ive(order, value.detach().cpu().numpy())
-        return torch.from_numpy(ive_val).to(value)
+# class Ive(torch.autograd.Function):
+#     """
+#     Computes a differentiable scaled bessel function.
+#     """
+#     @staticmethod
+#     def forward(ctx, order, value):
+#         ctx.save_for_backward(value)
+#         ctx.order = order
+#         ive_val = ive(order, value.detach().cpu().numpy())
+#         return torch.from_numpy(ive_val).to(device=value.device, dtype=value.dtype)
     
-    @staticmethod
-    def backward(ctx, grad_output):
-        value = ctx.saved_tensors[0]
-        order = ctx.order
-        # derivative from p.14, equation 16:
-        # d/dx ive(order, value) = 1/2 * (ive(order - 1, value) + ive(order + 1, value))
-        di_dval = 0.5 * (ive(order - 1, value) + ive(order + 1, value))
-        return None, grad_output * di_dval
+#     @staticmethod
+#     def backward(ctx, grad_output):
+#         value = ctx.saved_tensors[0]
+#         order = ctx.order
+#         # derivative from p.14, equation 16:
+#         # d/dx ive(order, value) = 1/2 * (ive(order - 1, value) + ive(order + 1, value))
+#         di_dval = 0.5 * (ive(order - 1, value.detach().cpu().numpy()) + ive(order + 1, value.detach().cpu().numpy()))
+#         di_dval = torch.from_numpy(di_dval).to(device=value.device, dtype=value.dtype)
+#         return None, grad_output * di_dval
 
 # =========================
 # Checking utils
