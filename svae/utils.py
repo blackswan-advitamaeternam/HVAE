@@ -11,7 +11,7 @@ from typing import Tuple, List
 # =========================
 # The following section was taken from the official implementation
 
-class IveFunction(torch.autograd.Function):
+class Ive(torch.autograd.Function):
     @staticmethod
     def forward(self, v, z):
 
@@ -41,17 +41,16 @@ class IveFunction(torch.autograd.Function):
             grad_output * (ive(self.v - 1, z) - ive(self.v, z) * (self.v + z) / z),
         )
 
+ive = Ive.apply
 
-class Ive(torch.nn.Module):
-    def __init__(self, v):
-        super(Ive, self).__init__()
-        self.v = v
+# class Ive(torch.nn.Module):
+#     def __init__(self, v):
+#         super(Ive, self).__init__()
+#         self.v = v
 
-    def forward(self, z):
-        return ive(self.v, z)
+#     def forward(self, z):
+#         return ive(self.v, z)
 
-
-ive = IveFunction.apply
 
 
 ##########
