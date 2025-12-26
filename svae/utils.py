@@ -84,6 +84,104 @@ def ive_fraction_approx2(v, z, eps=1e-20):
 
     return (B_0 + B_2) / 2.0
 
+# =============================
+# Shuffling manifested loaders
+# =============================
+
+import math
+import torch
+from typing import Iterable, List, Sequence, Optional, Union, Iterator
+
+class ShuffledLoader:
+    """
+    Wraps an in-memory list of batches (e.g., manifested GPU batches) and yields them
+    in a reshuffled order each time you iterate.
+
+    Notes:
+      - Shuffles *batch order* by default.
+      - Optionally shuffles *within each batch* (same permutation applied to all tensors in the batch)
+        if tensors are indexable on dim 0.
+      - The underlying data remains on whatever device it already lives on.
+    """
+    def __init__(
+        self,
+        batches: Sequence[Sequence[torch.Tensor]],
+        *,
+        shuffle_batches: bool = True,
+        shuffle_within_batch: bool = False,
+        generator: Optional[torch.Generator] = None,
+        device_for_randperm: Optional[Union[str, torch.device]] = None,
+        drop_last: bool = False,
+    ):
+        self.batches = list(batches)
+        self.shuffle_batches = shuffle_batches
+        self.shuffle_within_batch = shuffle_within_batch
+        self.generator = generator
+        self.device_for_randperm = device_for_randperm  # None => torch.randperm default device (CPU)
+        self.drop_last = drop_last
+
+        # Basic validation: each batch is a sequence of tensors
+        if len(self.batches) == 0:
+            raise ValueError("ShuffledLoader received empty batches.")
+        for b in self.batches:
+            if not isinstance(b, (list, tuple)) or len(b) == 0:
+                raise ValueError("Each batch must be a non-empty list/tuple of tensors.")
+
+    def __len__(self) -> int:
+        return len(self.batches)
+
+    def _maybe_shuffle_within(self, batch: Sequence[torch.Tensor]) -> List[torch.Tensor]:
+        if not self.shuffle_within_batch:
+            return list(batch)
+
+        # Determine batch size from first tensor dim-0
+        first = batch[0]
+        if not isinstance(first, torch.Tensor) or first.ndim == 0:
+            return list(batch)
+
+        n = first.shape[0]
+        # Ensure all tensors share the same leading dimension n when applicable
+        for t in batch:
+            if isinstance(t, torch.Tensor) and t.ndim > 0 and t.shape[0] != n:
+                # If shapes mismatch, don't attempt within-batch shuffle
+                return list(batch)
+
+        perm = torch.randperm(
+            n,
+            generator=self.generator,
+            device=self.device_for_randperm
+        )
+        out = []
+        for t in batch:
+            if isinstance(t, torch.Tensor) and t.ndim > 0 and t.shape[0] == n:
+                out.append(t.index_select(0, perm))
+            else:
+                out.append(t)
+        return out
+
+    def __iter__(self) -> Iterator[List[torch.Tensor]]:
+        idx = torch.arange(len(self.batches))
+        if self.shuffle_batches:
+            perm = torch.randperm(
+                len(self.batches),
+                generator=self.generator,
+                device=self.device_for_randperm
+            )
+            idx = idx[perm]
+
+        for i in idx.tolist():
+            yield self._maybe_shuffle_within(self.batches[i])
+
+    def set_epoch(self, epoch: int) -> None:
+        """
+        Optional: call this each epoch if you want deterministic-but-different shuffles.
+        If a generator was provided, we reseed it based on epoch.
+        """
+        if self.generator is None:
+            self.generator = torch.Generator()
+        # A simple epoch-dependent seed; adjust to your reproducibility scheme as needed.
+        self.generator.manual_seed(10_000 + int(epoch))
+
 # =========================
 # Checking utils
 # =========================
