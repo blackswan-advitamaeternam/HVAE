@@ -3,6 +3,7 @@ import torch.nn.functional as F
 import torch
 import numpy as np
 import copy
+from tqdm.auto import tqdm
 
 # Custom imports
 from svae.vae import SVAE, GaussianVAE, M1, M1_M2
@@ -108,7 +109,7 @@ def training(dataloader: torch.utils.data.DataLoader,
                         "kl":[]},
                 "val":{"recon":[],
                         "kl":[]}}
-    for epoch in range(1,epochs+1):
+    for epoch in tqdm(list(range(1,epochs+1)), desc="Epochs.."):
         # TRAINING
         model.train()
         epoch_loss = 0
@@ -129,7 +130,7 @@ def training(dataloader: torch.utils.data.DataLoader,
 
             if scheduler is not None:
                 scheduler.step()
-            epoch_loss = epoch_loss + loss
+            epoch_loss = epoch_loss + loss.detach()
             for key in epoch_parts.keys():
                 epoch_parts[key].append(parts[key])
             
@@ -223,7 +224,7 @@ def training_M1(dataloader: torch.utils.data.DataLoader,
                         "kl":[]},
                 "val":{"recon":[],
                         "kl":[]}}
-    for epoch in range(1,epochs+1):
+    for epoch in tqdm(list(range(1,epochs+1)), desc="Epochs.."):
         # TRAINING
         model.train()
         epoch_loss = 0
@@ -244,7 +245,7 @@ def training_M1(dataloader: torch.utils.data.DataLoader,
 
             if scheduler is not None:
                 scheduler.step()
-            epoch_loss = epoch_loss + loss
+            epoch_loss = epoch_loss + loss.detach()
             for key in epoch_parts.keys():
                 epoch_parts[key].append(parts[key])
             
@@ -347,7 +348,7 @@ def training_M1M2(dataloader: torch.utils.data.DataLoader,
                         "M2":[]},
                 "val":{"M1":[],
                         "M2":[]}}
-    for epoch in range(1,epochs+1):
+    for epoch in tqdm(list(range(1,epochs+1)), desc="Epochs.."):
         # TRAINING
         model.train()
         epoch_loss = 0
@@ -370,7 +371,7 @@ def training_M1M2(dataloader: torch.utils.data.DataLoader,
 
             if scheduler is not None:
                 scheduler.step()
-            epoch_loss = epoch_loss + loss
+            epoch_loss = epoch_loss + loss.detach()
             for key in epoch_parts.keys():
                 epoch_parts[key].append(parts[key])
             
