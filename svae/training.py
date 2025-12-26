@@ -267,7 +267,7 @@ def training_M1(dataloader: torch.utils.data.DataLoader,
                 x = batch[0].to(device, non_blocking=True)
                 loss, parts = model.full_step(x, 
                                             beta_kl=beta_kl)
-                val_epoch_loss = val_epoch_loss + loss.item()
+                val_epoch_loss = val_epoch_loss + loss
                 for key in val_epoch_parts.keys():
                     val_epoch_parts[key].append(parts[key])
                 
