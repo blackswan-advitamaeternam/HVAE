@@ -103,7 +103,9 @@ def make_cv_loaders_MNIST(cv=5, batch_size=100, device=None, force=False, **kwar
             cv_list, test_loader = dico["cv"], dico["test"]
     return cv_list, test_loader
 
-def make_splits_loaders_MNIST(val_size=10000, batch_size=100, test_batch_size=100, device=None, force=False, **kwargs):
+def make_splits_loaders_MNIST(train_size=None, val_size=10000, test_size=None, 
+                              batch_size=100, test_batch_size=100,
+                              device=None, force=False, **kwargs):
     """
     Loads the dynamically binarized MNIST trainset, applies
     a stratified split on it to form a train_loader/val_loader
@@ -113,7 +115,10 @@ def make_splits_loaders_MNIST(val_size=10000, batch_size=100, test_batch_size=10
     if "splitted_MNIST.pkl" not in os.listdir(str(PARENTFOLDER)) or force:
         print("\nMaking splits..")
         X, Y = load_binarized_mnist_tensor("train", batch_size=batch_size, device=device)
-        skf = StratifiedShuffleSplit(n_splits=1, test_size=val_size)
+        if train_size is not None:
+            skf = StratifiedShuffleSplit(n_splits=1, train_size=train_size, test_size=val_size)
+        else:
+            skf = StratifiedShuffleSplit(n_splits=1, test_size=val_size)
         split_indices = skf.split(X, Y)
 
         train_index, val_index = [itm for itm in split_indices][0]
@@ -133,10 +138,26 @@ def make_splits_loaders_MNIST(val_size=10000, batch_size=100, test_batch_size=10
                             shuffle=True,
                             **kwargs)
 
-        test_loader  = load_binarized_mnist_torch("test", 
-                                                batch_size=test_batch_size, 
-                                                device=device,
-                                                shuffle=False)
+        if test_size is not None:
+            X, Y = load_binarized_mnist_tensor("test", batch_size=test_batch_size, device=device, shuffle=False)
+
+            skf = StratifiedShuffleSplit(n_splits=1, test_size=test_size)
+            split_indices = skf.split(X, Y)
+
+            test_index, _= [itm for itm in split_indices][0]
+
+            test_X, test_Y = X[test_index,:], Y[test_index]
+
+            test_dataset = TensorDataset(test_X, test_Y) 
+            test_loader = DataLoader(test_dataset,
+                                batch_size=batch_size,
+                                shuffle=True,
+                                **kwargs)
+        else:
+            test_loader  = load_binarized_mnist_torch("test", 
+                                                    batch_size=test_batch_size, 
+                                                    device=device,
+                                                    shuffle=False)
 
         # save for future use
         path = PARENTFOLDER / "splitted_MNIST.pkl"
