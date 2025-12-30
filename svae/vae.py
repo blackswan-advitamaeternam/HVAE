@@ -937,9 +937,11 @@ class M1:
         self._clf_is_fitted = True
         return self
     
-    def predict_class(self, data_tensor, mode):
+    def predict_class(self, data_tensor, mode, return_latent=False):
         assert self._clf_is_fitted, f"Classifier not fitted yet. you must call fit_clf beforehand."
         latent, _, _ = self.get_latent(data_tensor, mode, verbose=False)
+        if return_latent:
+            return self.clf.predict(latent), latent
         return self.clf.predict(latent)
 
 class M1_M2:
@@ -1138,26 +1140,35 @@ def predict_classes_loader(model, loader, mode, return_latent=False):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     Y = []
     Y_hat = []
-    if return_latent:
+    if return_latent and isinstance(model, M1_M2):
         Z1 = []
         Z2 = []
+    if return_latent and isinstance(model, M1):
+        Z1 = []
+
     for batch in loader:
         x = batch[0].to(device, non_blocking=True)
         y = batch[1].to(device, non_blocking=True)
-        if return_latent:
+        if return_latent and isinstance(model, M1_M2):
             y_hat, z1, z2 = model.predict_class(x, mode, return_latent)
             Z1.append(z1)
             Z2.append(z2)
+        elif return_latent and isinstance(model, M1):
+            y_hat, z1 = model.predict_class(x, mode, return_latent)
+            Z1.append(z1)
         else:
             y_hat = model.predict_class(x, mode, return_latent)
 
-        Y.append(y)
+        Y.append(y.detach().cpu().numpy())
         Y_hat.append(y_hat)
     
     Y = np.concat(Y)
     Y_hat = np.concat(Y_hat)
-    if return_latent:
+    if return_latent and isinstance(model, M1_M2):
         Z1 = np.concat(Z1)
         Z2 = np.concat(Z2)
         return Y, Y_hat, Z1, Z2
+    elif return_latent and isinstance(model, M1):
+        Z1 = np.concat(Z1)
+        return Y, Y_hat, Z1
     return Y, Y_hat

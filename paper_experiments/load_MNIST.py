@@ -139,12 +139,12 @@ def make_splits_loaders_MNIST(train_size=None, val_size=10000, test_size=None,
                             **kwargs)
 
         if test_size is not None:
-            X, Y = load_binarized_mnist_tensor("test", batch_size=test_batch_size, device=device, shuffle=False)
+            X, Y = load_binarized_mnist_tensor("test", batch_size=test_batch_size, device=device)
 
             skf = StratifiedShuffleSplit(n_splits=1, test_size=test_size)
             split_indices = skf.split(X, Y)
 
-            test_index, _= [itm for itm in split_indices][0]
+            _, test_index= [itm for itm in split_indices][0]
 
             test_X, test_Y = X[test_index,:], Y[test_index]
 
@@ -172,6 +172,9 @@ def make_splits_loaders_MNIST(train_size=None, val_size=10000, test_size=None,
         with open(str(path), "rb") as f:
             dico = pkl.load(f)
             train_loader, val_loader, test_loader = dico["train"], dico["val"], dico["test"]
+    print("Train", len(train_loader)*batch_size)
+    print("Val", len(val_loader)*batch_size)
+    print("Test", len(test_loader)*test_batch_size)
     return train_loader, val_loader, test_loader
 
 if __name__ == "__main__":

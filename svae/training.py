@@ -119,7 +119,7 @@ def training(dataloader: torch.utils.data.DataLoader,
             x = batch[0].to(device, non_blocking=True)
             optimizer.zero_grad()
 
-            if beta_arr is not None:
+            if beta_arr is not None and epoch <= warmup:
                 beta_kl = beta_arr[epoch-1]
             loss, parts = model.full_step(x, 
                                         beta_kl=beta_kl)
@@ -234,7 +234,7 @@ def training_M1(dataloader: torch.utils.data.DataLoader,
             x = batch[0].to(device, non_blocking=True)
             optimizer.zero_grad()
 
-            if beta_arr is not None:
+            if beta_arr is not None and epoch <= warmup:
                 beta_kl = beta_arr[epoch-1]
             loss, parts = model.full_step(x, 
                                         beta_kl=beta_kl)
@@ -282,12 +282,13 @@ def training_M1(dataloader: torch.utils.data.DataLoader,
         
         # check early stoppage
         if early_stopper.check_stop(model, val_epoch_loss):
+            print(f"\nEarly stoppage after {epoch} epochs with patience of {patience}.")
+            print(f"Fitting KNN classifier..")
             # fit KNN
-            model.fit_clf(torch.cat([batch[0] for batch in dataloader]).cpu(), 
-                          torch.cat([batch[1] for batch in dataloader]).cpu(), 
+            model.fit_clf(torch.cat([batch[0].to(device, non_blocking=True) for batch in dataloader]), 
+                          torch.cat([batch[1].to(device, non_blocking=True) for batch in dataloader]), 
                           mode)
             
-            print(f"\nEarly stoppage after {epoch} epochs with patience of {patience}.")
             final_loss_idx = early_stopper.best_loss_idx
             print(f"Best epoch: {final_loss_idx}")
             if final_loss_idx == 1:
@@ -311,9 +312,11 @@ def training_M1(dataloader: torch.utils.data.DataLoader,
             print("Loss printing format:\nepoch x: val = loss (-recon + beta_kl * kl) | train = loss (-recon + beta_kl * kl)\n")
         if epoch % show_loss_every == 0:
             print(f"epoch {epoch}: val = {losses["val"][-1]:.4f} ({format_loss(val_epoch_parts, beta_kl)}) | train = {losses["train"][-1]:.4f} ({format_loss(epoch_parts, beta_kl)})")
+    
+    print(f"Fitting KNN classifier..")
     # fit KNN
-    model.fit_clf(torch.cat([batch[0] for batch in dataloader]).cpu(), 
-                    torch.cat([batch[1] for batch in dataloader]).cpu(), 
+    model.fit_clf(torch.cat([batch[0].to(device, non_blocking=True) for batch in dataloader]), 
+                    torch.cat([batch[1].to(device, non_blocking=True) for batch in dataloader]), 
                     mode)
     model.load_state_dict(early_stopper.best_state)
     return model, losses, all_parts
@@ -358,7 +361,7 @@ def training_M1M2(dataloader: torch.utils.data.DataLoader,
             x = batch[0].to(device, non_blocking=True)
             optimizer.zero_grad()
 
-            if beta_arr is not None:
+            if beta_arr is not None and epoch <= warmup:
                 beta_kl = beta_arr[epoch-1]
 
             loss, parts = model.full_step(x, 
