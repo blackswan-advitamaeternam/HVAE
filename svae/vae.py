@@ -8,7 +8,7 @@ from scipy.optimize import linear_sum_assignment
 
 # Custome imports
 from.sampling import batch_sample_vmf, sample_gaussian
-from.utils import Ive
+from.utils import Ive, ive_fraction_approx2
 
 def torch_gamma_func(val):
     """
@@ -25,10 +25,21 @@ def xavier_uniform_initialization(model):
             if layer.bias is not None:
                 nn.init.zeros_(layer.bias)
 
+def mse_loss(x_recon, x):
+    """Used for classic approaches where continuity is assumed"""
+    # dim squared error
+    se = (x_recon - x) ** 2  
+    # sum over dimensions, mean over batch
+    return se.view(se.size(0), -1).sum(dim=1).mean()
+
+def bce_loss(x_recon, x):
+    """Used for MNIST"""
+    return F.binary_cross_entropy(x_recon, x, reduction='sum') / x.size(0)
+
 class SVAE(nn.Module):
     """implémentation du s-vae avec distribution vmf"""
     
-    def __init__(self, input_dim, hidden_dim, latent_dim, one_layer=False):
+    def __init__(self, input_dim, hidden_dim, latent_dim, one_layer=False, mode='classic'):
         super().__init__()
         self.input_dim = input_dim
         self.hidden_dim = hidden_dim
@@ -76,6 +87,12 @@ class SVAE(nn.Module):
         xavier_uniform_initialization(self.kappa_encoder)
         xavier_uniform_initialization(self.decoder)
 
+        # Reconstruction Loss
+        if mode.lower() == 'classic':
+            self.recon_loss_fn = mse_loss
+        else:
+            self.recon_loss_fn = bce_loss
+
     @property
     def device(self):
         return next(self.parameters()).device
@@ -118,13 +135,13 @@ class SVAE(nn.Module):
         # to do so we need to specify the backward ourselves (see p.14 equation 16)
         # implemented as Ive in utils.py 
 
-        bessel_ratio = kappa * (ive / (ive_prev + 1e-8))
+        bessel_ratio = kappa * ive_fraction_approx2(torch.tensor(m/2), kappa) #kappa * (ive / (ive_prev + 1e-8))
         # print("ive, ive_prev, kappa", ive, ive_prev, kappa)
         # terme log c_m(kappa)
         # >> RAPH: a true Iv term is necessary (not Ive because there is no ratio here, see Eq.4 p.3)
         ive = Ive.apply(m/2 - 1, kappa)
         # log iv = log ive + kappa
-        log_iv = torch.log(ive + 1e-8) + kappa
+        log_iv = torch.log(ive + 1e-30) + kappa
         
         log_cm = (m/2 - 1) * torch.log(kappa + 1e-8) - (m/2) * torch.log(2 * torch.tensor(torch.pi)) - log_iv
         # >> RAPH: there was a kappa missing, I added it
@@ -151,19 +168,7 @@ class SVAE(nn.Module):
         return x_recon, mu, kappa
 
     def reconstruction_loss(self, x_recon, x):
-        # >> RAPH: The original x (not latent) are assumed to be Gaussian 
-        # so MSE is good here (its implicit 
-        # in the paper because they never speak about the prior on 
-        # the input only the prior on the latent space)
-        # By looking at their code we can see that they 
-        # never actually code grep + gcor but only use BCE (they had a binary task
-        # since they use the Binarized MNIST = their model predict logits for each 
-        # pixel in the binary image)
-
-        # dim squared error
-        se = (x_recon - x) ** 2  
-        # sum over dimensions, mean over batch
-        return se.view(se.size(0), -1).sum(dim=1).mean()
+        return self.recon_loss_fn(x_recon, x)
     
     def full_step(self, x, beta_kl, return_latent=False):
         if return_latent:
@@ -309,7 +314,7 @@ class SVAE(nn.Module):
 class GaussianVAE(nn.Module):
     """vae standard avec prior gaussien"""
     
-    def __init__(self, input_dim, hidden_dim, latent_dim, one_layer=False):
+    def __init__(self, input_dim, hidden_dim, latent_dim, one_layer=False, mode='classic'):
         super().__init__()
         self.input_dim = input_dim
         self.hidden_dim = hidden_dim
@@ -346,6 +351,12 @@ class GaussianVAE(nn.Module):
         xavier_uniform_initialization(self.logvar_encoder)
         xavier_uniform_initialization(self.decoder)
 
+        # Reconstruction Loss
+        if mode.lower() == 'classic':
+            self.recon_loss_fn = mse_loss
+        else:
+            self.recon_loss_fn = bce_loss
+
     @property
     def device(self):
         return next(self.parameters()).device
@@ -370,10 +381,7 @@ class GaussianVAE(nn.Module):
         return x_recon, mu, logvar
     
     def reconstruction_loss(self, x_recon, x):
-        # dim squared error
-        se = (x_recon - x) ** 2  
-        # sum over dimensions, mean over batch
-        return se.view(se.size(0), -1).sum(dim=1).mean()
+        return self.recon_loss_fn(x_recon, x)
     
     def full_step(self, x, beta_kl, return_latent=False):
         if return_latent:
@@ -499,11 +507,11 @@ class GaussianVAE(nn.Module):
             return self.get_latent_distributions(data_tensor, verbose)
         else:
             raise ValueError(f"Unrecognized mode {mode}. Should either be 'sample' or 'dist'.")
-        
+
 class SVAE_M2(nn.Module):
     """implémentation du s-vae de type M2 avec distribution vmf"""
     
-    def __init__(self, input_dim, hidden_dim, latent_dim, n_clusters, one_layer=False):
+    def __init__(self, input_dim, hidden_dim, latent_dim, n_clusters, one_layer=False, mode='classic'):
         super().__init__()
         self.input_dim = input_dim
         self.hidden_dim = hidden_dim
@@ -566,6 +574,12 @@ class SVAE_M2(nn.Module):
         xavier_uniform_initialization(self.kappa_encoder)
         xavier_uniform_initialization(self.decoder)
 
+        # Reconstruction Loss
+        if mode.lower() == 'classic':
+            self.recon_loss_fn = mse_loss
+        else:
+            self.recon_loss_fn = bce_loss
+
     @property
     def device(self):
         return next(self.parameters()).device
@@ -615,13 +629,13 @@ class SVAE_M2(nn.Module):
         # to do so we need to specify the backward ourselves (see p.14 equation 16)
         # implemented as Ive in utils.py 
 
-        bessel_ratio = kappa * (ive / (ive_prev + 1e-8))
+        bessel_ratio = kappa * ive_fraction_approx2(torch.tensor(m/2), kappa) #kappa * (ive / (ive_prev + 1e-8))
         # print("ive, ive_prev, kappa", ive, ive_prev, kappa)
         # terme log c_m(kappa)
         # >> RAPH: a true Iv term is necessary (not Ive because there is no ratio here, see Eq.4 p.3)
         ive = Ive.apply(m/2 - 1, kappa)
         # log iv = log ive + kappa
-        log_iv = torch.log(ive + 1e-8) + kappa
+        log_iv = torch.log(ive + 1e-30) + kappa
         
         log_cm = (m/2 - 1) * torch.log(kappa + 1e-8) - (m/2) * torch.log(2 * torch.tensor(torch.pi)) - log_iv
         # >> RAPH: there was a kappa missing, I added it
@@ -647,19 +661,7 @@ class SVAE_M2(nn.Module):
         return x_recon, mu, kappa, logits
 
     def reconstruction_loss(self, x_recon, x):
-        # >> RAPH: The original x (not latent) are assumed to be Gaussian 
-        # so MSE is good here (its implicit 
-        # in the paper because they never speak about the prior on 
-        # the input only the prior on the latent space)
-        # By looking at their code we can see that they 
-        # never actually code grep + gcor but only use BCE (they had a binary task
-        # since they use the Binarized MNIST = their model predict logits for each 
-        # pixel in the binary image)
-
-        # dim squared error
-        se = (x_recon - x) ** 2  
-        # sum over dimensions, mean over batch
-        return se.view(se.size(0), -1).sum(dim=1).mean()
+        return self.recon_loss_fn(x_recon, x)
     
     def full_step(self, x, y, beta_kl, alpha):
         N = x.size(1)
@@ -730,7 +732,7 @@ class GaussianVAE_M2(nn.Module):
     sigma depends de z uniquement
     """
     
-    def __init__(self, input_dim, hidden_dim, latent_dim, n_clusters, one_layer=False):
+    def __init__(self, input_dim, hidden_dim, latent_dim, n_clusters, one_layer=False, mode='classic'):
         super().__init__()
         self.input_dim = input_dim
         self.hidden_dim = hidden_dim
@@ -782,6 +784,12 @@ class GaussianVAE_M2(nn.Module):
         xavier_uniform_initialization(self.mu_encoder)
         xavier_uniform_initialization(self.logvar_encoder)
         xavier_uniform_initialization(self.decoder)
+
+        # Reconstruction Loss
+        if mode.lower() == 'classic':
+            self.recon_loss_fn = mse_loss
+        else:
+            self.recon_loss_fn = bce_loss
     
     @property
     def device(self):
@@ -810,10 +818,7 @@ class GaussianVAE_M2(nn.Module):
         return x_recon, mu, logvar, logits
     
     def reconstruction_loss(self, x_recon, x):
-        # dim squared error
-        se = (x_recon - x) ** 2  
-        # sum over dimensions, mean over batch
-        return se.view(se.size(0), -1).sum(dim=1).mean()
+        return self.recon_loss_fn(x_recon, x)
     
     def full_step(self, x, y, beta_kl, alpha):
         N = x.size(1)
@@ -909,6 +914,7 @@ class M1:
         hidden_dim: int,
         latent_dim: int,
         one_layer: bool = True,
+        mode:str='MNIST',
         **kwargs # for the KNN
         ):
         self.latent_dim = latent_dim
@@ -926,7 +932,8 @@ class M1:
         self.vae = vae_cls(input_dim=input_dim,
                            hidden_dim=hidden_dim,
                            latent_dim=latent_dim,
-                           one_layer=one_layer)
+                           one_layer=one_layer,
+                           mode=mode)
         
         self.clf = KNeighborsClassifier(**kwargs)
         self._clf_is_fitted = False
@@ -974,6 +981,8 @@ class M1_M2:
         latent_dim2: int,
         n_clusters: int,
         one_layer: bool = True,
+        mode1: str = 'MNIST',
+        mode2: str = 'classic',
         ):
         self.latent_dim1 = latent_dim1
         self.latent_dim2 = latent_dim2
@@ -989,7 +998,8 @@ class M1_M2:
         self.vae_m1 = vae_m1(input_dim=input_dim,
                            hidden_dim=hidden_dim,
                            latent_dim=latent_dim1,
-                           one_layer=one_layer)
+                           one_layer=one_layer,
+                           mode=mode1)
         
         # M2
         if m2_type == "normal":
@@ -1003,7 +1013,8 @@ class M1_M2:
                            hidden_dim=hidden_dim,
                            latent_dim=latent_dim2,
                            n_clusters=n_clusters,
-                           one_layer=one_layer)
+                           one_layer=one_layer,
+                           mode=mode2)
 
     def to(self, device):
         self.vae_m1.to(device)
