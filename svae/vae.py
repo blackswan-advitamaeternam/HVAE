@@ -950,7 +950,7 @@ class M1:
             raise AttributeError(f"'{type(self).__name__}' object and its 'vae' attribute have no attribute '{name}'")
         
     def fit_clf(self, data_tensor, label_tensor, mode):
-        idx = np.randint(0, data_tensor.size(0), self.N_fit_clf, device=data_tensor.device)
+        idx = torch.randint(0, data_tensor.size(0), self.N_fit_clf, device=data_tensor.device)
         data_tensor = data_tensor[idx,:]
 
         _, latent_mu, _ = self.get_latent(data_tensor, mode)
