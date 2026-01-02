@@ -323,7 +323,8 @@ def training_M1(dataloader: torch.utils.data.DataLoader,
     model.load_state_dict(early_stopper.best_state)
     return model, losses, all_parts
 
-def training_M1M2(dataloader: torch.utils.data.DataLoader,
+def training_M1M2(unlabeled_dataloader: torch.utils.data.DataLoader,
+                  labeled_dataloader: torch.utils.data.DataLoader,
                   val_dataloader:torch.utils.data.DataLoader,
                   model: torch.nn.Module, 
                   optimizer: torch.optim.Optimizer, 
@@ -362,18 +363,18 @@ def training_M1M2(dataloader: torch.utils.data.DataLoader,
         epoch_loss = 0
         epoch_parts = {"M1":[],
                        "M2":[]}
-        for batch in dataloader:
+        for batch in unlabeled_dataloader:
             x = batch[0].to(device, non_blocking=True)
-            y = batch[1].to(device, non_blocking=True)
 
             optimizer.zero_grad()
 
             if beta_arr is not None and epoch <= warmup:
                 beta_kl = beta_arr[epoch-1]
 
-            loss, parts = model.full_step(x, y.long(),
+            loss, parts = model.full_step(x, None,
                                         beta_kl=beta_kl,
-                                        alpha=alpha)
+                                        alpha=None,
+                                        mode='unlabeled')
             
             loss.backward()
 
@@ -384,9 +385,33 @@ def training_M1M2(dataloader: torch.utils.data.DataLoader,
             epoch_loss = epoch_loss + loss.detach()
             for key in epoch_parts.keys():
                 epoch_parts[key].append(parts[key])
+        
+        for batch in labeled_dataloader:
+            x = batch[0].to(device, non_blocking=True)
+            y = batch[1].to(device, non_blocking=True)
+
+            optimizer.zero_grad()
+
+            if beta_arr is not None and epoch <= warmup:
+                beta_kl = beta_arr[epoch-1]
+
+            loss, parts = model.full_step(x, y.long(),
+                                        beta_kl=beta_kl,
+                                        alpha=alpha,
+                                        mode='labeled')
             
+            loss.backward()
+
+            optimizer.step()
+
+            if scheduler is not None:
+                scheduler.step()
+            epoch_loss = epoch_loss + loss.detach()
+            for key in epoch_parts.keys():
+                epoch_parts[key].append(parts[key])
+
         # register average epoch loss
-        epoch_loss = epoch_loss.item() / len(dataloader)
+        epoch_loss = epoch_loss.item() / (len(unlabeled_dataloader) + len(labeled_dataloader))
         # from tensor to float
         epoch_parts = to_item(epoch_parts)
         # register average of epoch parts
@@ -406,7 +431,8 @@ def training_M1M2(dataloader: torch.utils.data.DataLoader,
 
                 loss, parts = model.full_step(x, y.long(),
                                             beta_kl=beta_kl,
-                                            alpha=alpha)
+                                            alpha=alpha,
+                                            mode='labeled') # evaluate labeled loss
                 val_epoch_loss = val_epoch_loss + loss
                 for key in val_epoch_parts.keys():
                     val_epoch_parts[key].append(parts[key])

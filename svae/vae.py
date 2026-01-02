@@ -689,6 +689,57 @@ class SVAE_M2(nn.Module):
         return loss, dict(recon=recon_loss.detach(),
                           kl=kl_loss.detach(),
                           classif_loss=classif_loss.detach())
+    
+    def unlabeled_full_step(self, x, beta_kl):
+        """
+        UNLABELED STEP (Marginalization)
+        Loss = Sum_y [ q(y|x) * ( -ELBO(x,y) ) ] - H(q(y|x))
+        """
+        # 1. Get class probabilities q(y|x)
+        logits = self.cluster_block(x)
+        probs = F.softmax(logits, dim=1) # [batch, n_clusters]
+        
+        total_weighted_elbo_loss = 0
+        
+        # 2. Iterate over all possible classes y
+        for y_idx in range(self.n_clusters):
+            # Create a batch of y_idx (one-hot)
+            y_target = torch.full((x.size(0),), y_idx, dtype=torch.long, device=self.device)
+            y_onehot = F.one_hot(y_target, num_classes=self.n_clusters).float()
+            
+            # Run VAE as if this class was the truth
+            x_recon, mu, kappa, logits = self.forward(x)
+            
+            # Calculate losses per item (reduction='none')
+            # Recon
+            if self.recon_loss_fn == mse_loss:
+                recon_loss = F.mse_loss(x_recon, x, reduction='none').sum(dim=1)
+            else:
+                recon_loss = F.binary_cross_entropy(x_recon, x, reduction='none').sum(dim=1)
+                
+            # KL
+            kl_loss = self.kl_vmf(kappa).mean()
+            
+            # ELBO Loss term (Negative ELBO)
+            # We want to minimize: -ELBO = Recon + beta * KL
+            elbo_loss_term = recon_loss + beta_kl * kl_loss
+            
+            # Weight by probability q(y=y_idx|x)
+            # w_elbo: [batch]
+            w_elbo = probs[:, y_idx] * elbo_loss_term
+            total_weighted_elbo_loss += w_elbo
+
+        # 3. Entropy of q(y|x) (Regularization term)
+        # in Kingma M2: L = E_q(y|x)[L(x,y)] + H(q(y|x))
+        # Since we minimize Loss = -L, we minimize:
+        # Sum [q(y) * (-L(x,y))] - H(q(y))
+        
+        entropy = -torch.sum(probs * torch.log(probs + 1e-8), dim=1)
+        
+        # Final average over batch
+        loss_u = torch.mean(total_weighted_elbo_loss - entropy)
+        
+        return loss_u, dict(loss_u=loss_u.detach(), entropy=entropy.mean().detach())
 
     def sample(self, mu, kappa):
         return batch_sample_vmf(mu, kappa, mu.size(0))
@@ -838,6 +889,57 @@ class GaussianVAE_M2(nn.Module):
         return loss, dict(recon=recon_loss.detach(),
                           kl=kl_loss.detach(),
                           classif_loss=classif_loss.detach())
+    
+    def unlabeled_full_step(self, x, beta_kl):
+        """
+        UNLABELED STEP (Marginalization)
+        Loss = Sum_y [ q(y|x) * ( -ELBO(x,y) ) ] - H(q(y|x))
+        """
+        # 1. Get class probabilities q(y|x)
+        logits = self.cluster_block(x)
+        probs = F.softmax(logits, dim=1) # [batch, n_clusters]
+        
+        total_weighted_elbo_loss = 0
+        
+        # 2. Iterate over all possible classes y
+        for y_idx in range(self.n_clusters):
+            # Create a batch of y_idx (one-hot)
+            y_target = torch.full((x.size(0),), y_idx, dtype=torch.long, device=self.device)
+            y_onehot = F.one_hot(y_target, num_classes=self.n_clusters).float()
+            
+            # Run VAE as if this class was the truth
+            x_recon, mu, logvar, logits = self.forward(x)
+            
+            # Calculate losses per item (reduction='none')
+            # Recon
+            if self.recon_loss_fn == mse_loss:
+                recon_loss = F.mse_loss(x_recon, x, reduction='none').sum(dim=1)
+            else:
+                recon_loss = F.binary_cross_entropy(x_recon, x, reduction='none').sum(dim=1)
+                
+            # KL
+            kl_loss = 0.5 * (-1 - logvar + mu.pow(2) + logvar.exp()).sum(dim=1)
+            
+            # ELBO Loss term (Negative ELBO)
+            # We want to minimize: -ELBO = Recon + beta * KL
+            elbo_loss_term = recon_loss + beta_kl * kl_loss
+            
+            # Weight by probability q(y=y_idx|x)
+            # w_elbo: [batch]
+            w_elbo = probs[:, y_idx] * elbo_loss_term
+            total_weighted_elbo_loss += w_elbo
+
+        # 3. Entropy of q(y|x) (Regularization term)
+        # in Kingma M2: L = E_q(y|x)[L(x,y)] + H(q(y|x))
+        # Since we minimize Loss = -L, we minimize:
+        # Sum [q(y) * (-L(x,y))] - H(q(y))
+        
+        entropy = -torch.sum(probs * torch.log(probs + 1e-8), dim=1)
+        
+        # Final average over batch
+        loss_u = torch.mean(total_weighted_elbo_loss - entropy)
+        
+        return loss_u, dict(loss_u=loss_u.detach(), entropy=entropy.mean().detach())
     
     def sample(self, mu, std):
         return sample_gaussian(mu, std)
@@ -1160,13 +1262,27 @@ class M1_M2:
         z1_recon = self.decode(logits, z2)
         return x_recon, param1_M1, param2_M1, z1_recon, param1_M2, param2_M2, logits
 
-    def full_step(self, x, y, beta_kl, alpha):
+    def labeled_full_step(self, x, y, beta_kl, alpha):
         M1_loss, M1_dict, z1 = self.vae_m1.full_step(x, beta_kl, return_latent=True)
         M2_loss, M2_dict = self.vae_m2.full_step(z1, y, beta_kl, alpha)
 
         loss = M1_loss + M2_loss
         return loss, dict(M1=M1_loss.detach(),
                           M2=M2_loss.detach())
+
+    def unlabeled_full_step(self, x, beta_kl):
+        M1_loss, M1_dict, z1 = self.vae_m1.full_step(x, beta_kl, return_latent=True)
+        M2_loss, M2_dict = self.vae_m2.unlabeled_full_step(z1, beta_kl)
+
+        loss = M1_loss + M2_loss
+        return loss, dict(M1=M1_loss.detach(),
+                          M2=M2_loss.detach())
+    
+    def full_step(self, x, y, beta_kl, alpha, mode='labeled'):
+        if mode == 'labeled':
+            return self.labeled_full_step(x, y, beta_kl, alpha)
+        else:
+            return self.unlabeled_full_step(x, beta_kl)
     
     def predict_class(self, data_tensor, mode, return_latent=False):
         _, z1_input, _ = self.vae_m1.get_latent(data_tensor, mode, verbose=False)
