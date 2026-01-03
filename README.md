@@ -40,3 +40,14 @@ Experiment leading to observing the latent space learned using N-VAE compared to
 ```bash
 python preliminary_notebooks/preliminary_exp.py
 ``` 
+
+#### **Semi-Suervised experiments (M1)**
+Corresponds to Table 2 of the paper.  
+See the Table 2 notebook:  
+<a target="_blank" href="https://colab.research.google.com/github/blackswan-advitamaeternam/HVAE/blob/raph/paper_experiments/Table2_exp.ipynb"> <img src="https://colab.research.google.com/assets/colab-badge.svg" alt="Open In Colab"/> </a>
+
+#### **Semi-Suervised experiments (M1+M2)**
+Corresponds to Table 3 of the paper.  
+See the Table 3 notebook:  
+<a target="_blank" href="https://colab.research.google.com/github/blackswan-advitamaeternam/HVAE/blob/raph/paper_experiments/Table3_exp.ipynb"> <img src="https://colab.research.google.com/assets/colab-badge.svg" alt="Open In Colab"/> </a>
+

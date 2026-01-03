@@ -2,13 +2,10 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.distributions.gamma import Gamma
-import numpy as np
-from tqdm.auto import tqdm
 
 # Custome imports
-from.sampling import sample_vmf, batch_sample_vmf, sample_gaussian
-from.utils import Ive, Iv
+from.sampling import batch_sample_vmf, sample_gaussian
+from.utils import Ive
 
 def torch_gamma_func(val):
     """

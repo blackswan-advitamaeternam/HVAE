@@ -2,15 +2,13 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.distributions.gamma import Gamma
 import numpy as np
-from itertools import chain
-from tqdm.auto import tqdm
 from sklearn.neighbors import KNeighborsClassifier
+from scipy.optimize import linear_sum_assignment
 
 # Custome imports
-from.sampling import sample_vmf, batch_sample_vmf, sample_gaussian
-from.utils import Ive, Iv
+from.sampling import batch_sample_vmf, sample_gaussian
+from.utils import Ive, ive_fraction_approx2
 
 def torch_gamma_func(val):
     """
@@ -27,10 +25,21 @@ def xavier_uniform_initialization(model):
             if layer.bias is not None:
                 nn.init.zeros_(layer.bias)
 
+def mse_loss(x_recon, x):
+    """Used for classic approaches where continuity is assumed"""
+    # dim squared error
+    se = (x_recon - x) ** 2  
+    # sum over dimensions, mean over batch
+    return se.view(se.size(0), -1).sum(dim=1).mean()
+
+def bce_loss(x_recon, x):
+    """Used for MNIST"""
+    return F.binary_cross_entropy_with_logits(x_recon, x, reduction='sum') / x.size(0)
+
 class SVAE(nn.Module):
     """implémentation du s-vae avec distribution vmf"""
     
-    def __init__(self, input_dim, hidden_dim, latent_dim, one_layer=False):
+    def __init__(self, input_dim, hidden_dim, latent_dim, one_layer=False, mode='classic'):
         super().__init__()
         self.input_dim = input_dim
         self.hidden_dim = hidden_dim
@@ -78,6 +87,16 @@ class SVAE(nn.Module):
         xavier_uniform_initialization(self.kappa_encoder)
         xavier_uniform_initialization(self.decoder)
 
+        # Reconstruction Loss
+        if mode.lower() == 'classic':
+            self.recon_loss_fn = mse_loss
+        else:
+            self.recon_loss_fn = bce_loss
+
+    @property
+    def device(self):
+        return next(self.parameters()).device
+
     def encode(self, x):
         h = self.encoder(x)
         # mu normalisé sur la sphère
@@ -116,13 +135,13 @@ class SVAE(nn.Module):
         # to do so we need to specify the backward ourselves (see p.14 equation 16)
         # implemented as Ive in utils.py 
 
-        bessel_ratio = kappa * (ive / (ive_prev + 1e-8))
+        bessel_ratio = kappa * ive_fraction_approx2(torch.tensor(m/2), kappa) #kappa * (ive / (ive_prev + 1e-8))
         # print("ive, ive_prev, kappa", ive, ive_prev, kappa)
         # terme log c_m(kappa)
         # >> RAPH: a true Iv term is necessary (not Ive because there is no ratio here, see Eq.4 p.3)
         ive = Ive.apply(m/2 - 1, kappa)
         # log iv = log ive + kappa
-        log_iv = torch.log(ive + 1e-8) + kappa
+        log_iv = torch.log(ive + 1e-30) + kappa
         
         log_cm = (m/2 - 1) * torch.log(kappa + 1e-8) - (m/2) * torch.log(2 * torch.tensor(torch.pi)) - log_iv
         # >> RAPH: there was a kappa missing, I added it
@@ -149,19 +168,7 @@ class SVAE(nn.Module):
         return x_recon, mu, kappa
 
     def reconstruction_loss(self, x_recon, x):
-        # >> RAPH: The original x (not latent) are assumed to be Gaussian 
-        # so MSE is good here (its implicit 
-        # in the paper because they never speak about the prior on 
-        # the input only the prior on the latent space)
-        # By looking at their code we can see that they 
-        # never actually code grep + gcor but only use BCE (they had a binary task
-        # since they use the Binarized MNIST = their model predict logits for each 
-        # pixel in the binary image)
-
-        # dim squared error
-        se = (x_recon - x) ** 2  
-        # sum over dimensions, mean over batch
-        return se.view(se.size(0), -1).sum(dim=1).mean()
+        return self.recon_loss_fn(x_recon, x)
     
     def full_step(self, x, beta_kl, return_latent=False):
         if return_latent:
@@ -187,10 +194,10 @@ class SVAE(nn.Module):
         # BUT the MSE is already the (- recon) term when using Gaussian as the input prior
         loss = recon_loss + beta_kl * kl_loss
         if return_latent:
-            return loss, dict(recon=recon_loss.item(),
-                            kl=kl_loss.item()), latent
-        return loss, dict(recon=recon_loss.item(),
-                          kl=kl_loss.item())
+            return loss, dict(recon=recon_loss.detach(),
+                            kl=kl_loss.detach()), latent
+        return loss, dict(recon=recon_loss.detach(),
+                          kl=kl_loss.detach())
     
     def marginal_ll_batch(self, x, N: int = 500):
         """
@@ -307,7 +314,7 @@ class SVAE(nn.Module):
 class GaussianVAE(nn.Module):
     """vae standard avec prior gaussien"""
     
-    def __init__(self, input_dim, hidden_dim, latent_dim, one_layer=False):
+    def __init__(self, input_dim, hidden_dim, latent_dim, one_layer=False, mode='classic'):
         super().__init__()
         self.input_dim = input_dim
         self.hidden_dim = hidden_dim
@@ -343,7 +350,17 @@ class GaussianVAE(nn.Module):
         xavier_uniform_initialization(self.mu_encoder)
         xavier_uniform_initialization(self.logvar_encoder)
         xavier_uniform_initialization(self.decoder)
-        
+
+        # Reconstruction Loss
+        if mode.lower() == 'classic':
+            self.recon_loss_fn = mse_loss
+        else:
+            self.recon_loss_fn = bce_loss
+
+    @property
+    def device(self):
+        return next(self.parameters()).device
+    
     def encode(self, x):
         h = self.encoder(x)
         return self.mu_encoder(h), self.logvar_encoder(h)
@@ -364,10 +381,7 @@ class GaussianVAE(nn.Module):
         return x_recon, mu, logvar
     
     def reconstruction_loss(self, x_recon, x):
-        # dim squared error
-        se = (x_recon - x) ** 2  
-        # sum over dimensions, mean over batch
-        return se.view(se.size(0), -1).sum(dim=1).mean()
+        return self.recon_loss_fn(x_recon, x)
     
     def full_step(self, x, beta_kl, return_latent=False):
         if return_latent:
@@ -385,10 +399,10 @@ class GaussianVAE(nn.Module):
         # BUT the MSE is already the (- recon) term when using Gaussian as the input prior
         loss = recon_loss + beta_kl * kl_loss
         if return_latent:
-            return loss, dict(recon=recon_loss.item(),
-                            kl=kl_loss.item()), latent
-        return loss, dict(recon=recon_loss.item(),
-                          kl=kl_loss.item())
+            return loss, dict(recon=recon_loss.detach(),
+                            kl=kl_loss.detach()), latent
+        return loss, dict(recon=recon_loss.detach(),
+                          kl=kl_loss.detach())
     
     def marginal_ll_batch(self, x, N: int = 500):
         """
@@ -493,11 +507,11 @@ class GaussianVAE(nn.Module):
             return self.get_latent_distributions(data_tensor, verbose)
         else:
             raise ValueError(f"Unrecognized mode {mode}. Should either be 'sample' or 'dist'.")
-        
+
 class SVAE_M2(nn.Module):
     """implémentation du s-vae de type M2 avec distribution vmf"""
     
-    def __init__(self, input_dim, hidden_dim, latent_dim, n_clusters, one_layer=False):
+    def __init__(self, input_dim, hidden_dim, latent_dim, n_clusters, one_layer=False, mode='classic'):
         super().__init__()
         self.input_dim = input_dim
         self.hidden_dim = hidden_dim
@@ -560,28 +574,43 @@ class SVAE_M2(nn.Module):
         xavier_uniform_initialization(self.kappa_encoder)
         xavier_uniform_initialization(self.decoder)
 
-    def encode(self, x):
+        # Reconstruction Loss
+        if mode.lower() == 'classic':
+            self.recon_loss_fn = mse_loss
+        else:
+            self.recon_loss_fn = bce_loss
+
+    @property
+    def device(self):
+        return next(self.parameters()).device
+
+    def move_cat_dist(self):
+        print(f"\nMoving Categorical Dist to {self.device}")
+        self.cat_dist = torch.distributions.Categorical(torch.tensor([1/self.n_clusters]*self.n_clusters, device=self.device))
+
+    def encode(self, x, y=None):
         logits = self.cluster_block(x)
         
+        # If y is not provided (unsupervised call), approximate with soft probabilities
+        if y is None:
+            y = F.softmax(logits, dim=1)
+            
         h = self.encoder(x)
         
         # mu normalisé sur la sphère
-        mu = self.mu_encoder(torch.cat([h,logits], dim=1))
+        # Condition on y (one-hot or soft)
+        mu = self.mu_encoder(torch.cat([h, y], dim=1))
         mu = mu / (torch.norm(mu, dim=-1, keepdim=True) + 1e-8)
         
         # kappa positif
         kappa = F.softplus(self.kappa_encoder(h)) + 1
-        # >> RAPH: Why +0.1 ? the authors used +1 => corrected
-        
-        # >> RAPH: When kappa grows too high, the probability of acceptance drops
-        # clipping to prevent getting stuck at sampling
-        # not normalizing because that would completely change the resulting distribution we sample from !!
         kappa = torch.clip(kappa, max=self.max_kappa)
 
         return mu, kappa, logits
     
-    def decode(self, logits, z):
-        return self.decoder(torch.cat([z,logits], dim=1))
+    def decode(self, z, y):
+        # Condition reconstruction on z and y
+        return self.decoder(torch.cat([z, y], dim=1))
     
     def kl_vmf(self, kappa):
         # >> RAPH: One of the main remarks in the calculations 
@@ -601,13 +630,13 @@ class SVAE_M2(nn.Module):
         # to do so we need to specify the backward ourselves (see p.14 equation 16)
         # implemented as Ive in utils.py 
 
-        bessel_ratio = kappa * (ive / (ive_prev + 1e-8))
+        bessel_ratio = kappa * ive_fraction_approx2(torch.tensor(m/2), kappa) #kappa * (ive / (ive_prev + 1e-8))
         # print("ive, ive_prev, kappa", ive, ive_prev, kappa)
         # terme log c_m(kappa)
         # >> RAPH: a true Iv term is necessary (not Ive because there is no ratio here, see Eq.4 p.3)
         ive = Ive.apply(m/2 - 1, kappa)
         # log iv = log ive + kappa
-        log_iv = torch.log(ive + 1e-8) + kappa
+        log_iv = torch.log(ive + 1e-30) + kappa
         
         log_cm = (m/2 - 1) * torch.log(kappa + 1e-8) - (m/2) * torch.log(2 * torch.tensor(torch.pi)) - log_iv
         # >> RAPH: there was a kappa missing, I added it
@@ -616,63 +645,98 @@ class SVAE_M2(nn.Module):
         const = (m/2) * torch.log(torch.tensor(torch.pi)) + torch.log(torch.tensor(2)) - torch.log(torch_gamma_func(m/2))
         return bessel_ratio + log_cm + const # see Eq.14 and Eq. 15 p.13
     
-    def forward(self, x):
-        # B x input_dim
-        mu, kappa, logits = self.encode(x)
-        # B x latent_dim, B x 1
+    def forward(self, x, y=None):
+        # 1. Encode to get parameters
+        mu, kappa, logits = self.encode(x, y)
 
-        # échantillonnage
-        batch_size = x.shape[0]
+        # 2. Sample z
         z = self.sample(mu, kappa)
-        # B x latent_dim
         
-        # reconstruction
-        x_recon = self.decode(logits, z)
-        # B x input_dim
+        # 3. Handle y for decoding
+        # If y was provided, use it. If not, use the soft probabilities from logits.
+        y_used = y if y is not None else F.softmax(logits, dim=1)
+        
+        # 4. Decode
+        x_recon = self.decode(z, y_used)
         
         return x_recon, mu, kappa, logits
 
     def reconstruction_loss(self, x_recon, x):
-        # >> RAPH: The original x (not latent) are assumed to be Gaussian 
-        # so MSE is good here (its implicit 
-        # in the paper because they never speak about the prior on 
-        # the input only the prior on the latent space)
-        # By looking at their code we can see that they 
-        # never actually code grep + gcor but only use BCE (they had a binary task
-        # since they use the Binarized MNIST = their model predict logits for each 
-        # pixel in the binary image)
-
-        # dim squared error
-        se = (x_recon - x) ** 2  
-        # sum over dimensions, mean over batch
-        return se.view(se.size(0), -1).sum(dim=1).mean()
+        return self.recon_loss_fn(x_recon, x)
     
-    def full_step(self, x, beta_kl, alpha):
-        N = x.size(1)
-        x_recon, mu, kappa, logits = self.forward(x)
-            
+    def full_step(self, x, y, beta_kl, alpha):
+        """
+        LABELED STEP
+        y: LongTensor of indices (e.g., [0, 3, 2])
+        """
+        # Convert indices to one-hot floats
+        y_onehot = F.one_hot(y, num_classes=self.n_clusters).float()
+        
+        # Pass ground truth y to forward
+        x_recon, mu, kappa, logits = self.forward(x, y=y_onehot)
+        
+        # Classification Loss (Cross Entropy uses logits + indices)
+        classif_loss = F.cross_entropy(logits, y)
+        
         # reconstruction loss
         recon_loss = self.reconstruction_loss(x_recon, x)
         
         # kl divergence
-        # >> RAPH: We average the kl loss over the batch (the usual 
-        # sum used in the per term kl of the gaussian comes from an analytical 
-        # formula that requires to sum over dimensions, but the overal KL loss
-        # should be averaged for final loss computation)
-        # Note: Sum and Means are both okay since its fndamentally a sum in both cases
-        # however, a mean allows a KL term that is not dependent on the batch size whereas 
-        # a sum is sensitive to this. Using a mean allows comparison across experiments of losses
-        # whereas the sum does not.
         kl_loss = self.kl_vmf(kappa).mean()
 
-        y_loss = self.cat_dist.log_prob(torch.argmax(logits, dim=1)) # per sample log prob
-        y_loss = y_loss.mean() # expected value
+        # LOSS = - ELBO + alpha * classif_loss
+        loss = recon_loss + beta_kl * kl_loss + alpha * classif_loss
+        return loss, dict(recon=recon_loss.detach(),
+                          kl=kl_loss.detach(),
+                          classif_loss=classif_loss.detach())
+    
+    def unlabeled_full_step(self, x, beta_kl):
+        """
+        UNLABELED STEP (Marginalization)
+        Loss = Sum_y [ q(y|x) * ( -ELBO(x,y) ) ] - H(q(y|x))
+        """
+        # 1. Get class probabilities q(y|x) from the classifier
+        logits = self.cluster_block(x)
+        probs = F.softmax(logits, dim=1) # [batch, n_clusters]
+        
+        total_weighted_elbo_loss = 0
 
-        # LOSS = - ELBO = - (recon - beta * KL - alpha * N * KL_y) voir Kingma 2014 SemiSupervised
-        loss = recon_loss + beta_kl * kl_loss + alpha * N * y_loss
-        return loss, dict(recon=recon_loss.item(),
-                          kl=kl_loss.item(),
-                          y_loss=y_loss.item())
+        # 2. Iterate over all possible classes y (Enumeration)
+        for y_idx in range(self.n_clusters):
+            # Create CONSTANT one-hot vector for this hypothesis
+            # We do NOT want gradients flowing back into y_onehot (it's fixed)
+            y_target = torch.full((x.size(0),), y_idx, dtype=torch.long, device=self.device)
+            y_onehot = F.one_hot(y_target, num_classes=self.n_clusters).float()
+            
+            # Run VAE conditioned on the SPECIFIC y class
+            # x_recon and mu/kappa will be specific to this y assumption
+            mu, kappa, _ = self.encode(x, y=y_onehot)
+            z = self.sample(mu, kappa)
+            x_recon = self.decode(z, y_onehot)
+            
+            # Calculate losses per item (reduction='none')
+            if self.recon_loss_fn == mse_loss:
+                recon_loss = F.mse_loss(x_recon, x, reduction='none').sum(dim=1)
+            else:
+                recon_loss = F.binary_cross_entropy_with_logits(x_recon, x, reduction='none').sum(dim=1)
+            
+            # KL is constant wrt to y because kappa does not depend on y !
+            kl_val = self.kl_vmf(kappa) # [batch] size
+
+            # ELBO Loss term (Negative ELBO)
+            elbo_loss_term = recon_loss + beta_kl * kl_val
+            
+            # Weight by probability q(y=y_idx|x)
+            w_elbo = probs[:, y_idx] * elbo_loss_term
+            total_weighted_elbo_loss += w_elbo
+
+        # 3. Entropy of q(y|x) (Regularization term)
+        entropy = -torch.sum(probs * torch.log(probs + 1e-8), dim=1)
+        
+        # Final average over batch
+        loss_u = torch.mean(total_weighted_elbo_loss - entropy)
+        
+        return loss_u, dict(loss_u=loss_u.detach(), entropy=entropy.mean().detach())
 
     def sample(self, mu, kappa):
         return batch_sample_vmf(mu, kappa, mu.size(0))
@@ -716,7 +780,7 @@ class GaussianVAE_M2(nn.Module):
     sigma depends de z uniquement
     """
     
-    def __init__(self, input_dim, hidden_dim, latent_dim, n_clusters, one_layer=False):
+    def __init__(self, input_dim, hidden_dim, latent_dim, n_clusters, one_layer=False, mode='classic'):
         super().__init__()
         self.input_dim = input_dim
         self.hidden_dim = hidden_dim
@@ -768,49 +832,107 @@ class GaussianVAE_M2(nn.Module):
         xavier_uniform_initialization(self.mu_encoder)
         xavier_uniform_initialization(self.logvar_encoder)
         xavier_uniform_initialization(self.decoder)
-        
-    def encode(self, x):
-        h = self.encoder(x)
-        logits = self.cluster_block(x)
-        return self.mu_encoder(torch.cat([h,logits], dim=1)), self.logvar_encoder(h), logits
+
+        # Reconstruction Loss
+        if mode.lower() == 'classic':
+            self.recon_loss_fn = mse_loss
+        else:
+            self.recon_loss_fn = bce_loss
     
-    def decode(self, logits, z):
-        return self.decoder(torch.cat([z,logits], dim=1))
+    @property
+    def device(self):
+        return next(self.parameters()).device
+    
+    def move_cat_dist(self):
+        print(f"\nMoving Categorical Dist to {self.device}")
+        self.cat_dist = torch.distributions.Categorical(torch.tensor([1/self.n_clusters]*self.n_clusters, device=self.device))
+
+    def encode(self, x, y=None):
+        logits = self.cluster_block(x)
+        if y is None:
+            y = F.softmax(logits, dim=1)
+            
+        h = self.encoder(x)
+        # Condition on y
+        mu = self.mu_encoder(torch.cat([h, y], dim=1))
+        logvar = self.logvar_encoder(h)
+        return mu, logvar, logits
+    
+    def decode(self, z, y):
+        # Condition on z and y
+        return self.decoder(torch.cat([z, y], dim=1))
     
     def reparameterize(self, mu, logvar):
         std = torch.exp(0.5 * logvar)
         return sample_gaussian(mu, std)
     
-    def forward(self, x):
-        mu, logvar, logits = self.encode(x)
+    def forward(self, x, y=None):
+        mu, logvar, logits = self.encode(x, y)
         z = self.reparameterize(mu, logvar)
-        x_recon = self.decode(logits, z)
+        
+        y_used = y if y is not None else F.softmax(logits, dim=1)
+        x_recon = self.decode(z, y_used)
         return x_recon, mu, logvar, logits
     
     def reconstruction_loss(self, x_recon, x):
-        # dim squared error
-        se = (x_recon - x) ** 2  
-        # sum over dimensions, mean over batch
-        return se.view(se.size(0), -1).sum(dim=1).mean()
+        return self.recon_loss_fn(x_recon, x)
     
-    def full_step(self, x, beta_kl, alpha):
-        N = x.size(1)
-        x_recon, mu, logvar, logits = self.forward(x)
-            
-        recon_loss = self.reconstruction_loss(x_recon, x)
-        kl_loss = 0.5 * (-1 - logvar + mu.pow(2) + logvar.exp()) 
-        # >> RAPH: for each input we compute the formula for log q/p when q and p are gaussians
-        kl_loss = kl_loss.sum(dim=1).mean()
-        # >> RAPH: sum over dimensions, we then take the expected value (estimated over the batch)
+    def full_step(self, x, y, beta_kl, alpha):
+        # Convert indices to one-hot
+        y_onehot = F.one_hot(y, num_classes=self.n_clusters).float()
         
-        y_loss = self.cat_dist.log_prob(torch.argmax(logits, dim=1)) # per sample log prob
-        y_loss = y_loss.mean() # expected value
+        # Pass ground truth y
+        x_recon, mu, logvar, logits = self.forward(x, y=y_onehot)
+    
+        classif_loss = F.cross_entropy(logits, y)
+        recon_loss = self.reconstruction_loss(x_recon, x)
+        
+        # KL for Gaussian
+        kl_loss = 0.5 * (-1 - logvar + mu.pow(2) + logvar.exp()) 
+        kl_loss = kl_loss.sum(dim=1).mean()
 
-        # LOSS = - ELBO = - (recon - beta * KL + alpha * N * KL_y) voir Kingma 2014 SemiSupervised
-        loss = recon_loss + beta_kl * kl_loss - alpha * N * y_loss
-        return loss, dict(recon=recon_loss.item(),
-                          kl=kl_loss.item(),
-                          y_loss=y_loss.item())
+        loss = recon_loss + beta_kl * kl_loss + alpha * classif_loss
+        return loss, dict(recon=recon_loss.detach(),
+                          kl=kl_loss.detach(),
+                          classif_loss=classif_loss.detach())
+    
+    def unlabeled_full_step(self, x, beta_kl):
+        """
+        UNLABELED STEP (Marginalization)
+        """
+        logits = self.cluster_block(x)
+        probs = F.softmax(logits, dim=1) 
+        
+        total_weighted_elbo_loss = 0
+        
+        for y_idx in range(self.n_clusters):
+            # Create CONSTANT one-hot vector
+            y_target = torch.full((x.size(0),), y_idx, dtype=torch.long, device=self.device)
+            y_onehot = F.one_hot(y_target, num_classes=self.n_clusters).float()
+            
+            # Run VAE conditioned on specific y
+            # We must re-run encode/sample/decode here because mu depends on y!
+            mu, logvar, _ = self.encode(x, y=y_onehot)
+            z = self.reparameterize(mu, logvar)
+            x_recon = self.decode(z, y_onehot)
+            
+            if self.recon_loss_fn == mse_loss:
+                recon_loss = F.mse_loss(x_recon, x, reduction='none').sum(dim=1)
+            else:
+                recon_loss = F.binary_cross_entropy_with_logits(x_recon, x, reduction='none').sum(dim=1)
+                
+            kl_loss = 0.5 * (-1 - logvar + mu.pow(2) + logvar.exp()).sum(dim=1)
+            
+            elbo_loss_term = recon_loss + beta_kl * kl_loss
+            
+            w_elbo = probs[:, y_idx] * elbo_loss_term
+            total_weighted_elbo_loss += w_elbo
+
+        entropy = -torch.sum(probs * torch.log(probs + 1e-8), dim=1)
+        
+        loss_u = torch.mean(total_weighted_elbo_loss - entropy)
+        
+        return loss_u, dict(loss_u=loss_u.detach(), entropy=entropy.mean().detach())
     
     def sample(self, mu, std):
         return sample_gaussian(mu, std)
@@ -887,9 +1009,12 @@ class M1:
         hidden_dim: int,
         latent_dim: int,
         one_layer: bool = True,
+        mode:str='MNIST',
+        N_fit_clf:int = 100,
         **kwargs # for the KNN
         ):
         self.latent_dim = latent_dim
+        self.N_fit_clf = N_fit_clf
 
         # Inner VAE (Gaussian or SVAE)
         if vae_type == "normal":
@@ -904,11 +1029,15 @@ class M1:
         self.vae = vae_cls(input_dim=input_dim,
                            hidden_dim=hidden_dim,
                            latent_dim=latent_dim,
-                           one_layer=one_layer)
+                           one_layer=one_layer,
+                           mode=mode)
         
         self.clf = KNeighborsClassifier(**kwargs)
         self._clf_is_fitted = False
-
+    
+    def to(self, device):
+        self.vae.to(device)
+        
     def __getattr__(self, name):
         try:
             return getattr(self.vae, name)
@@ -916,15 +1045,32 @@ class M1:
             raise AttributeError(f"'{type(self).__name__}' object and its 'vae' attribute have no attribute '{name}'")
         
     def fit_clf(self, data_tensor, label_tensor, mode):
-        latent, _, _ = self.get_latent(data_tensor, mode)
-        self.clf.fit(latent, label_tensor.detach().cpu().numpy())
+        idx = torch.randint(0, data_tensor.size(0), (self.N_fit_clf,), device=data_tensor.device)
+        data_tensor = data_tensor[idx,:]
+        label_tensor = label_tensor[idx]
+
+        _, latent_mu, _ = self.get_latent(data_tensor, mode)
+        
+        # Ensure mu is on CPU and numpy for sklearn
+        if isinstance(latent_mu, torch.Tensor):
+            latent_mu = latent_mu.detach().cpu().numpy()
+        
+        print(latent_mu[:5])
+        print(label_tensor[:5])
+        self.clf.fit(latent_mu, label_tensor.detach().cpu().numpy())
         self._clf_is_fitted = True
         return self
     
-    def predict_class(self, data_tensor, mode):
-        assert self._clf_is_fitted, f"Classifier not fitted yet. you must call fit_clf beforehand."
-        latent, _, _ = self.get_latent(data_tensor, mode, verbose=False)
-        return self.clf.predict(latent)
+    def predict_class(self, data_tensor, mode, return_latent=False):
+        assert self._clf_is_fitted, "Classifier not fitted yet."
+        _, latent_mu, _ = self.get_latent(data_tensor, mode, verbose=False)
+        
+        if isinstance(latent_mu, torch.Tensor):
+            latent_mu = latent_mu.detach().cpu().numpy()
+
+        if return_latent:
+            return self.clf.predict(latent_mu), latent_mu
+        return self.clf.predict(latent_mu)
 
 class M1_M2:
     def __init__(self,
@@ -936,6 +1082,8 @@ class M1_M2:
         latent_dim2: int,
         n_clusters: int,
         one_layer: bool = True,
+        mode1: str = 'MNIST',
+        mode2: str = 'classic',
         ):
         self.latent_dim1 = latent_dim1
         self.latent_dim2 = latent_dim2
@@ -951,7 +1099,8 @@ class M1_M2:
         self.vae_m1 = vae_m1(input_dim=input_dim,
                            hidden_dim=hidden_dim,
                            latent_dim=latent_dim1,
-                           one_layer=one_layer)
+                           one_layer=one_layer,
+                           mode=mode1)
         
         # M2
         if m2_type == "normal":
@@ -965,7 +1114,12 @@ class M1_M2:
                            hidden_dim=hidden_dim,
                            latent_dim=latent_dim2,
                            n_clusters=n_clusters,
-                           one_layer=one_layer)
+                           one_layer=one_layer,
+                           mode=mode2)
+
+    def to(self, device):
+        self.vae_m1.to(device)
+        self.vae_m2.to(device)
 
     def __getattr__(self, name):
         try:
@@ -973,6 +1127,8 @@ class M1_M2:
                 return getattr(self.vae_m1, name)
             elif 'm2' in name:
                 return getattr(self.vae_m2, name)
+            elif name == 'move_cat_dist':
+                return self.vae_m2.move_cat_dist
             elif name == 'parameters':
                 param_gen_m1 = self.vae_m1.parameters()
                 param_gen_m2 = self.vae_m2.parameters()
@@ -1059,7 +1215,6 @@ class M1_M2:
                         missing_all += [f"vae_m2.{k}" for k in getattr(out2, "missing_keys", [])]
                         unexpected_all += [f"vae_m2.{k}" for k in getattr(out2, "unexpected_keys", [])]
 
-                    # meta is ignored for strictness; you can validate it if you want
                     return missing_all, unexpected_all
 
                 return _load_state_dict
@@ -1078,57 +1233,129 @@ class M1_M2:
         x_recon = self.decode(z)
         return x_recon, param1, param2
     
-    def encode_M2(self, z1):
-        return self.vae_m2.encode(z1)
+    def encode_M2(self, z1, y=None):
+        return self.vae_m2.encode(z1, y)
 
-    def decode_M2(self, logits, z2):
-        return self.vae_m2.decode(logits, z2)
+    def decode_M2(self, z2, y):
+        return self.vae_m2.decode(z2, y)
 
-    def forward_M2(self, z1):
-        param1, param2, logits = self.encode_M2(z1)
+    def forward_M2(self, z1, y=None):
+        param1, param2, logits = self.encode_M2(z1, y)
         z = self.sample(param1, param2)
-        x_recon = self.decode(logits, z)
+        
+        y_used = y if y is not None else F.softmax(logits, dim=1)
+        x_recon = self.decode(z, y_used)
         return x_recon, param1, param2, logits
     
-    def forward(self, x):
+    def forward(self, x, y=None):
+        # M1 Step
         param1_M1, param2_M1 = self.encode_M1(x)
-        z1 = self.sample(param1_M1, param2_M1)
-        x_recon = self.decode(z1)
+        z1 = self.sample_M1(param1_M1, param2_M1) # Need to helper or direct call
+        # Note: self.sample helper is tricky because M1 and M2 might have diff sample types
+        # Safest to call .sample on respective vaes or rename sample methods
+        
+        x_recon = self.vae_m1.decode(z1)
 
-        param1_M2, param2_M2, logits = self.encode_M2(z1)
-        z2 = self.sample(param1_M2, param2_M2)
-        z1_recon = self.decode(logits, z2)
+        # M2 Step
+        param1_M2, param2_M2, logits = self.encode_M2(z1, y)
+        # Sample M2
+        if isinstance(self.vae_m2, SVAE_M2):
+            z2 = self.vae_m2.sample(param1_M2, param2_M2)
+        else: # Gaussian
+            z2 = self.vae_m2.reparameterize(param1_M2, param2_M2)
+            
+        y_used = y if y is not None else F.softmax(logits, dim=1)
+        z1_recon = self.decode_M2(z2, y_used)
         return x_recon, param1_M1, param2_M1, z1_recon, param1_M2, param2_M2, logits
+    
+    # Helpers for sampling based on type
+    def sample_M1(self, p1, p2):
+        if isinstance(self.vae_m1, SVAE):
+            return self.vae_m1.sample(p1, p2)
+        else:
+            return self.vae_m1.reparameterize(p1, p2)
 
-    def full_step(self, x, beta_kl, alpha):
+    def labeled_full_step(self, x, y, beta_kl, alpha):
         M1_loss, M1_dict, z1 = self.vae_m1.full_step(x, beta_kl, return_latent=True)
-        M2_loss, M2_dict = self.vae_m2.full_step(z1, beta_kl, alpha)
+        # Pass y to M2
+        M2_loss, M2_dict = self.vae_m2.full_step(z1, y, beta_kl, alpha)
 
         loss = M1_loss + M2_loss
-        return loss, dict(M1=M1_loss.item(),
-                          M2=M2_loss.item())
+        # print("Labeled")
+        # print("M1:", M1_dict)
+        # print("M2:", M2_dict)
+        return loss, dict(M1=M1_loss.detach(),
+                          M2=M2_loss.detach())
+
+    def unlabeled_full_step(self, x, beta_kl):
+        M1_loss, M1_dict, z1 = self.vae_m1.full_step(x, beta_kl, return_latent=True)
+        # Unlabeled M2 Step
+        M2_loss, M2_dict = self.vae_m2.unlabeled_full_step(z1, beta_kl)
+
+        loss = M1_loss + M2_loss
+        # print("Unlabeled")
+        # print("M1:", M1_dict)
+        # print("M2:", M2_dict)
+        return loss, dict(M1=M1_loss.detach(),
+                          M2=M2_loss.detach())
+    
+    def full_step(self, x, y, beta_kl, alpha, mode='labeled'):
+        if mode == 'labeled':
+            return self.labeled_full_step(x, y, beta_kl, alpha)
+        else:
+            return self.unlabeled_full_step(x, beta_kl)
     
     def predict_class(self, data_tensor, mode, return_latent=False):
-        latent_M1, _, _ = self.vae_m1.get_latent(data_tensor, mode, verbose=False)
-        latent_M2, _, _, logits = self.vae_m2.get_latent(torch.from_numpy(latent_M1), mode, verbose=False)
+        _, z1_input, _ = self.vae_m1.get_latent(data_tensor, mode, verbose=False)
+        
+        # M2 inference
+        # Unsupervised -> y=None
+        latent_M2, _, _, logits = self.vae_m2.get_latent(z1_input, mode, verbose=False)
+        
+        y_hat = torch.argmax(logits, dim=1).detach().cpu().numpy()
+
         if return_latent:
-            return torch.argmax(logits, dim=1).detach().cpu().numpy(), latent_M1, latent_M2
-        return torch.argmax(logits, dim=1).detach().cpu().numpy()
+            return y_hat, z1_input, latent_M2
+        return y_hat
+
+
+def cluster_acc(Y_pred, Y_true):
+    """Accuracy after hungarian algorithm"""
+    Y_pred = Y_pred.astype(np.int64)
+    assert Y_pred.size == Y_true.size
+    D = max(Y_pred.max(), Y_true.max()) + 1
+    w = np.zeros((D, D), dtype=np.int64)
     
+    # Build confusion matrix
+    for i in range(Y_pred.size):
+        w[Y_pred[i], Y_true[i]] += 1
+        
+    # Find best assignment (maximize diagonal elements)
+    ind = linear_sum_assignment(w.max() - w)
+    
+    # Sum correct counts
+    return sum([w[i, j] for i, j in zip(*ind)]) * 1.0 / Y_pred.size
+
 def predict_classes_loader(model, loader, mode, return_latent=False):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     Y = []
     Y_hat = []
-    if return_latent:
+    if return_latent and isinstance(model, M1_M2):
         Z1 = []
         Z2 = []
+    if return_latent and isinstance(model, M1):
+        Z1 = []
+
     for batch in loader:
         x = batch[0].to(device, non_blocking=True)
-        y = batch[1].to(device, non_blocking=True)
-        if return_latent:
+        y = batch[1].detach().cpu().numpy()
+        if return_latent and isinstance(model, M1_M2):
             y_hat, z1, z2 = model.predict_class(x, mode, return_latent)
             Z1.append(z1)
             Z2.append(z2)
+        elif return_latent and isinstance(model, M1):
+            y_hat, z1 = model.predict_class(x, mode, return_latent)
+            Z1.append(z1)
         else:
             y_hat = model.predict_class(x, mode, return_latent)
 
@@ -1137,164 +1364,11 @@ def predict_classes_loader(model, loader, mode, return_latent=False):
     
     Y = np.concat(Y)
     Y_hat = np.concat(Y_hat)
-    if return_latent:
+    if return_latent and isinstance(model, M1_M2):
         Z1 = np.concat(Z1)
         Z2 = np.concat(Z2)
         return Y, Y_hat, Z1, Z2
+    elif return_latent and isinstance(model, M1):
+        Z1 = np.concat(Z1)
+        return Y, Y_hat, Z1
     return Y, Y_hat
-
-class UnsupervisedClusteringVAE(nn.Module):
-    """
-    Wrapper around GaussianVAE or SVAE that:
-      - trains the inner VAE unsupervised (standard ELBO)
-      - adds a clustering head q(y | z) over K clusters
-      - provides a utility method to compute the unsupervised loss
-
-    The clustering head is intended for:
-      - inducing cluster structure in the latent space
-      - later using q(y | z) as an unsupervised classifier
-
-    This is an M1-style model with an additional clustering regularizer,
-    not the full M2 semi-supervised generative model.
-    """
-
-    def __init__(
-        self,
-        vae_cls,               # GaussianVAE or SVAE class
-        input_dim: int,
-        hidden_dim: int,
-        latent_dim: int,
-        num_clusters: int,
-        beta_kl: float = 1.0,
-    ):
-        """
-        Args
-        ----
-        vae_cls: class
-            Either GaussianVAE or SVAE (or any compatible VAE with full_step).
-        input_dim: int
-            Dimension of the observed data x.
-        hidden_dim: int
-            Hidden dimension for the inner VAE.
-        latent_dim: int
-            Latent dimension of the inner VAE.
-        num_clusters: int
-            Assumed number of clusters K in the latent space.
-        beta_kl: float
-            Weight on the KL term in the inner VAE loss (beta-VAE style).
-        """
-        super().__init__()
-
-        self.num_clusters = num_clusters
-        self.latent_dim = latent_dim
-        self.beta_kl = beta_kl
-
-        # Inner VAE (Gaussian or SVAE)
-        self.vae = vae_cls(input_dim=input_dim,
-                           hidden_dim=hidden_dim,
-                           latent_dim=latent_dim)
-
-        # Simple clustering head: q(y | z)
-        # We use the latent mean as features (mu for Gaussian, mu for SVAE).
-        self.cluster_head = nn.Linear(latent_dim, num_clusters)
-
-    def encode(self, x):
-        """
-        Convenience pass-through to the inner VAE encoder.
-        Returns whatever the inner encoder returns.
-        """
-        return self.vae.encode(x)
-
-    def forward(self, x):
-        """
-        Forward pass through the inner VAE only.
-        (We keep this as a thin wrapper around the base model.)
-        """
-        return self.vae(x)
-
-    def _cluster_logits(self, latent_mean):
-        """
-        Compute logits for q(y | z) from the latent mean.
-        """
-        return self.cluster_head(latent_mean)
-
-    def unsupervised_loss(self, x, entropy_weight: float = 1.0):
-        """
-        Compute unsupervised loss:
-
-            L_total = L_vae(x) + entropy_weight * L_cluster(x)
-
-        where
-            L_vae(x)       = recon + beta_kl * KL   (from inner VAE.full_step)
-            L_cluster(x)   = KL( \bar{q}(y) || Uniform(K) ) - H( q(y|z) )
-
-        - The first term encourages good reconstruction + regularized latent.
-        - The clustering regularizer encourages:
-            * Balanced use of all K clusters (KL to uniform)
-            * Non-degenerate assignments per sample (via negative entropy)
-
-        Returns
-        -------
-        total_loss: torch.Tensor (scalar)
-        logs: dict of scalars for monitoring
-        """
-        # ----- 1. Inner VAE loss (unsupervised ELBO) -----
-        vae_loss, vae_logs = self.vae.full_step(x, beta_kl=self.beta_kl)
-        # vae_loss: scalar, already recon + beta_kl * kl
-
-        # We also need the latent mean to build q(y | z).
-        # GaussianVAE.encode -> (mu, logvar)
-        # SVAE.encode        -> (mu, kappa)
-        with torch.no_grad():
-            enc_out = self.vae.encode(x)
-        latent_mean = enc_out[0]   # first element is mu in both models
-
-        # ----- 2. Clustering head and regularizer -----
-        logits_y = self._cluster_logits(latent_mean)          # (B, K)
-        q_y = F.softmax(logits_y, dim=-1)                     # (B, K)
-
-        # (a) Encourage balanced clusters across the batch:
-        #     KL( \bar{q}(y) || Uniform(K) )
-        batch_mean = q_y.mean(dim=0)                          # (K,)
-        prior = torch.full_like(batch_mean, 1.0 / self.num_clusters)
-        kl_to_uniform = torch.sum(
-            batch_mean * (torch.log(batch_mean + 1e-8) - torch.log(prior + 1e-8))
-        )
-
-        # (b) Encourage confident assignments per sample:
-        #     - H(q(y|z)) = sum q(y|z) log q(y|z) (averaged over batch)
-        entropy = - (q_y * torch.log(q_y + 1e-8)).sum(dim=1).mean()
-
-        # Combined clustering regularizer
-        cluster_reg = kl_to_uniform - entropy
-
-        # ----- 3. Total loss -----
-        total_loss = vae_loss + entropy_weight * cluster_reg
-
-        logs = {
-            "loss_total": total_loss.item(),
-            "loss_vae": vae_loss.item(),
-            "cluster_reg": cluster_reg.item(),
-            "recon": vae_logs.get("recon", None),
-            "kl_latent": vae_logs.get("kl", None),
-            "kl_to_uniform": kl_to_uniform.item(),
-            "entropy_q_y": entropy.item(),
-        }
-
-        return total_loss, logs
-
-    def predict_clusters(self, x, use_mean: bool = True):
-        """
-        Predict cluster assignments for x using q(y | z).
-
-        Returns:
-            hard_assignments: (B,) long tensor of argmax cluster indices
-            probs:            (B, K) soft cluster probabilities
-        """
-        with torch.no_grad():
-            enc_out = self.vae.encode(x)
-            latent_mean = enc_out[0]
-            logits_y = self._cluster_logits(latent_mean)
-            probs = F.softmax(logits_y, dim=-1)
-            hard = probs.argmax(dim=-1)
-        return hard, probs

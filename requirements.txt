@@ -1,0 +1,13 @@
+numpy
+scipy
+pandas
+matplotlib
+seaborn
+umap-learn
+scikit-learn
+pathlib
+tqdm
+torch
+torchvision
+datasets
+scanpy

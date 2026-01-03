@@ -20,24 +20,30 @@ def binarize(image, label):
     image = tf.cast(tf.random.uniform(tf.shape(image)) < image, tf.float32)
     return image, label
 
-def load_binarized_mnist_tensor(split="train", batch_size=128, shuffle=True):
+def load_binarized_mnist_tensor(split="train", batch_size=128, device=None):
     # Load all examples of the given split as a single batch
     ds = tfds.load('mnist', shuffle_files=True, split=split, batch_size=batch_size, as_supervised=True)
     # apply dynamic binarization as in Salakhutdinov & Murray, 2008
     ds = ds.map(binarize)
-    ds_np = tfds.as_numpy(ds)
+    ds_np = list(tfds.as_numpy(ds))
     # ds_np["image"]: shape (N, 28, 28), values {0,1}
     print(len(ds_np))
     x = torch.from_numpy(np.concatenate([itm[0] for itm in ds_np])).float()
     x = torch.flatten(x, start_dim=1)
     print(x.size())
     y = torch.from_numpy(np.concatenate([itm[1] for itm in ds_np])).float()
+
+    if device is not None:
+        return x.to(device), y.to(device)
     return x, y
 
-def load_binarized_mnist_torch(split="train", batch_size=128, shuffle=True):
-    x, y = load_binarized_mnist_tensor(split, batch_size, shuffle)
+def load_binarized_mnist_torch(split="train", batch_size=128, shuffle=True, device=None):
+    x, y = load_binarized_mnist_tensor(split, batch_size, device)
 
-    dataset = TensorDataset(x, y)
+    if device is not None:
+        dataset = TensorDataset(x.to(device), y.to(device))
+    else:
+        dataset = TensorDataset(x, y)
     loader = DataLoader(dataset,
                         batch_size=batch_size,
                         shuffle=shuffle and (split == "train"))
@@ -51,7 +57,7 @@ def get_loaders_MNIST():
     test_loader  = load_binarized_mnist_torch("test", shuffle=False)
     return train_loader, test_loader
 
-def make_cv_loaders_MNIST(cv=5, batch_size=100, force=False, **kwargs):
+def make_cv_loaders_MNIST(cv=5, batch_size=100, device=None, force=False, **kwargs):
     """
     Loads the dynamically binarized MNIST trainset, applies
     a stratified K Fold CV split on it to form (train_loader, val_loader)
@@ -60,7 +66,7 @@ def make_cv_loaders_MNIST(cv=5, batch_size=100, force=False, **kwargs):
     """
     if "cv_splitted_MNIST.pkl" not in os.listdir(str(PARENTFOLDER)) or force:
         print("\nMaking splits..")
-        X, Y = load_binarized_mnist_tensor("train", batch_size=batch_size)
+        X, Y = load_binarized_mnist_tensor("train", batch_size=batch_size, device=device)
         skf = StratifiedKFold(n_splits=cv)
         split_indices = skf.split(X, Y)
 
@@ -82,7 +88,7 @@ def make_cv_loaders_MNIST(cv=5, batch_size=100, force=False, **kwargs):
                                 **kwargs)
             cv_list.append((train_loader, val_loader))
 
-        test_loader  = load_binarized_mnist_torch("test", batch_size=batch_size, shuffle=False)
+        test_loader  = load_binarized_mnist_torch("test", batch_size=batch_size, shuffle=False, device=device)
 
         # save for future use
         path = PARENTFOLDER / "cv_splitted_MNIST.pkl"
@@ -97,7 +103,9 @@ def make_cv_loaders_MNIST(cv=5, batch_size=100, force=False, **kwargs):
             cv_list, test_loader = dico["cv"], dico["test"]
     return cv_list, test_loader
 
-def make_splits_loaders_MNIST(val_size=10000, batch_size=100, force=False, **kwargs):
+def make_splits_loaders_MNIST(train_size=None, val_size=10000, test_size=None, 
+                              batch_size=100, test_batch_size=100,
+                              device=None, force=False, **kwargs):
     """
     Loads the dynamically binarized MNIST trainset, applies
     a stratified split on it to form a train_loader/val_loader
@@ -106,8 +114,11 @@ def make_splits_loaders_MNIST(val_size=10000, batch_size=100, force=False, **kwa
     """
     if "splitted_MNIST.pkl" not in os.listdir(str(PARENTFOLDER)) or force:
         print("\nMaking splits..")
-        X, Y = load_binarized_mnist_tensor("train", batch_size=batch_size)
-        skf = StratifiedShuffleSplit(n_splits=1, test_size=val_size)
+        X, Y = load_binarized_mnist_tensor("train", batch_size=batch_size, device=device)
+        if train_size is not None:
+            skf = StratifiedShuffleSplit(n_splits=1, train_size=train_size, test_size=val_size)
+        else:
+            skf = StratifiedShuffleSplit(n_splits=1, test_size=val_size)
         split_indices = skf.split(X, Y)
 
         train_index, val_index = [itm for itm in split_indices][0]
@@ -127,7 +138,26 @@ def make_splits_loaders_MNIST(val_size=10000, batch_size=100, force=False, **kwa
                             shuffle=True,
                             **kwargs)
 
-        test_loader  = load_binarized_mnist_torch("test", batch_size=batch_size, shuffle=False)
+        if test_size is not None:
+            X, Y = load_binarized_mnist_tensor("test", batch_size=test_batch_size, device=device)
+
+            skf = StratifiedShuffleSplit(n_splits=1, test_size=test_size)
+            split_indices = skf.split(X, Y)
+
+            _, test_index= [itm for itm in split_indices][0]
+
+            test_X, test_Y = X[test_index,:], Y[test_index]
+
+            test_dataset = TensorDataset(test_X, test_Y) 
+            test_loader = DataLoader(test_dataset,
+                                batch_size=batch_size,
+                                shuffle=True,
+                                **kwargs)
+        else:
+            test_loader  = load_binarized_mnist_torch("test", 
+                                                    batch_size=test_batch_size, 
+                                                    device=device,
+                                                    shuffle=False)
 
         # save for future use
         path = PARENTFOLDER / "splitted_MNIST.pkl"
@@ -142,6 +172,9 @@ def make_splits_loaders_MNIST(val_size=10000, batch_size=100, force=False, **kwa
         with open(str(path), "rb") as f:
             dico = pkl.load(f)
             train_loader, val_loader, test_loader = dico["train"], dico["val"], dico["test"]
+    print("Train", len(train_loader)*batch_size)
+    print("Val", len(val_loader)*batch_size)
+    print("Test", len(test_loader)*test_batch_size)
     return train_loader, val_loader, test_loader
 
 if __name__ == "__main__":
