@@ -40,6 +40,3 @@ Experiment leading to observing the latent space learned using N-VAE compared to
 ```bash
 python preliminary_notebooks/preliminary_exp.py
 ``` 
-
-## **Extension on single-cell data**
-
