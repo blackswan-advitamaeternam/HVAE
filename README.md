@@ -35,11 +35,15 @@ We decided to code their approach using PyTorch and Scipy.
 
 ## **Reproduction of experiments**
 #### **Recovering a 2D Manifold on the circle**
-Experiment leading to observing the latent space learned using N-VAE compared to S-VAE as done in Fig. 1 of the paper.
+Experiment leading to observing the latent space learned using N-VAE compared to S-VAE as done in Figure 1 of the paper.
 
 ```bash
 python preliminary_notebooks/preliminary_exp.py
 ``` 
+
+#### **MNIST visualization experiments**
+Corresponds to Figure 2 of the paper. 
+<a target="_blank" href="https://colab.research.google.com/github/blackswan-advitamaeternam/HVAE/blob/raph/paper_experiments/Figure2_exp.ipynb"> <img src="https://colab.research.google.com/assets/colab-badge.svg" alt="Open In Colab"/> </a>
 
 #### **Semi-Suervised experiments (M1)**
 Corresponds to Table 2 of the paper.  
