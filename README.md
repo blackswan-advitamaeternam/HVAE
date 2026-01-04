@@ -72,7 +72,7 @@ source .venv/bin/activate
 uv sync
 
 # Verify installation
-python -c "from svae import SVAE, GaussianVAE; print('✓ Ready')"
+python -c "from svae import SVAE, GaussianVAE; print('Ready')"
 ```
 
 ---
