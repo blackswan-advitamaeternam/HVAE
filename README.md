@@ -46,7 +46,7 @@ python preliminary_notebooks/preliminary_exp.py
 Corresponds to Table 1 of the paper: Log-likelihood (LL), ELBO, Reconstruction Error (RE), and KL divergence across latent dimensions d = 2, 5, 10, 20, 40.
 
 See the Table 1 notebook:  
-<a target="_blank" href="https://colab.research.google.com/github/blackswan-advitamaeternam/HVAE/blob/raph/paper_experiments/Table1_exp.ipynb"> <img src="https://colab.research.google.com/assets/colab-badge.svg" alt="Open In Colab"/> </a>
+<a target="_blank" href="https://colab.research.google.com/github/blackswan-advitamaeternam/HVAE/blob/main/paper_experiments/Table1_exp.ipynb"> <img src="https://colab.research.google.com/assets/colab-badge.svg" alt="Open In Colab"/> </a>
 
 ### **Semi-Supervised experiments (M1) — Table 2**
 Corresponds to Table 2 of the paper.  
