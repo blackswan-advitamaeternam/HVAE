@@ -17,7 +17,7 @@
 
 *Reproduction study for Prof. Stéphanie Allassonnière - Master MVA, ENS Paris-Saclay*
 
-**Authors:** [Mouhssine Rifaki](https://github.com/blackswan-advitamaeternam) • [Raphaël Rubrice](https://github.com/raphaelrubrice)
+**Authors:** [Mouhssine Rifaki](https://github.com/blackswan-advitamaeternam) & [Raphaël Rubrice](https://github.com/raphaelrubrice)
 
 </div>
 
