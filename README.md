@@ -34,20 +34,26 @@ uv sync
 We decided to code their approach using PyTorch and Scipy.
 
 ## **Reproduction of experiments**
-#### **Recovering a 2D Manifold on the circle**
+
+### **Recovering a 2D Manifold on the circle (Figure 1)**
 Experiment leading to observing the latent space learned using N-VAE compared to S-VAE as done in Fig. 1 of the paper.
 
 ```bash
 python preliminary_notebooks/preliminary_exp.py
 ``` 
 
-#### **Semi-Supervised experiments (M1)**
+### **Unsupervised evaluation on MNIST (Table 1)**
+Corresponds to Table 1 of the paper: Log-likelihood (LL), ELBO, Reconstruction Error (RE), and KL divergence across latent dimensions d = 2, 5, 10, 20, 40.
+
+See the Table 1 notebook:  
+<a target="_blank" href="https://colab.research.google.com/github/blackswan-advitamaeternam/HVAE/blob/raph/paper_experiments/Table1_exp.ipynb"> <img src="https://colab.research.google.com/assets/colab-badge.svg" alt="Open In Colab"/> </a>
+
+### **Semi-Supervised experiments (M1) — Table 2**
 Corresponds to Table 2 of the paper.  
 See the Table 2 notebook:  
 <a target="_blank" href="https://colab.research.google.com/github/blackswan-advitamaeternam/HVAE/blob/raph/paper_experiments/Table2_exp.ipynb"> <img src="https://colab.research.google.com/assets/colab-badge.svg" alt="Open In Colab"/> </a>
 
-#### **Semi-Supervised experiments (M1+M2)**
+### **Semi-Supervised experiments (M1+M2) — Table 3**
 Corresponds to Table 3 of the paper.  
 See the Table 3 notebook:  
 <a target="_blank" href="https://colab.research.google.com/github/blackswan-advitamaeternam/HVAE/blob/raph/paper_experiments/Table3_exp.ipynb"> <img src="https://colab.research.google.com/assets/colab-badge.svg" alt="Open In Colab"/> </a>
-
