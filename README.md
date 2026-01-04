@@ -51,9 +51,9 @@ See the Table 1 notebook:
 ### **Semi-Supervised experiments (M1) — Table 2**
 Corresponds to Table 2 of the paper.  
 See the Table 2 notebook:  
-<a target="_blank" href="https://colab.research.google.com/github/blackswan-advitamaeternam/HVAE/blob/raph/paper_experiments/Table2_exp.ipynb"> <img src="https://colab.research.google.com/assets/colab-badge.svg" alt="Open In Colab"/> </a>
+<a target="_blank" href="https://colab.research.google.com/github/blackswan-advitamaeternam/HVAE/blob/main/paper_experiments/Table2_exp.ipynb"> <img src="https://colab.research.google.com/assets/colab-badge.svg" alt="Open In Colab"/> </a>
 
 ### **Semi-Supervised experiments (M1+M2) — Table 3**
 Corresponds to Table 3 of the paper.  
 See the Table 3 notebook:  
-<a target="_blank" href="https://colab.research.google.com/github/blackswan-advitamaeternam/HVAE/blob/raph/paper_experiments/Table3_exp.ipynb"> <img src="https://colab.research.google.com/assets/colab-badge.svg" alt="Open In Colab"/> </a>
+<a target="_blank" href="https://colab.research.google.com/github/blackswan-advitamaeternam/HVAE/blob/main/paper_experiments/Table3_exp.ipynb"> <img src="https://colab.research.google.com/assets/colab-badge.svg" alt="Open In Colab"/> </a>
